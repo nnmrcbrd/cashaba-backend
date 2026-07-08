@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AccountRole {
+  USER
+  ADMIN
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum TokenType {
+  REFRESH
+  VERIFICATION
+  PASSWORD_RESET
+}
+
+enum LoanType {
+  BORROWED
+  LENT
+}
+
+enum LoanStatus {
+  ACTIVE
+  PAID_OFF
+  OVERDUE
+}
+
+enum Role {
+  STUDENT
+  WORKING
+  FREELANCE
+  MARRIED
+}
+
+model User {
+  id        String  @id @default(uuid())
+  email     String  @unique
+  password  String
+  firstName String
+  lastName  String
+  gender    String?
+
+  accountRole AccountRole @default(USER)
+  roles       Role[]
+
+  emailVerified DateTime? @map("email_verified")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Auth Relations
+  tokens Token[]
+
+  // Financial Dashboard Relations
+  transactions Transaction[]
+  budgets      Budget[]
+  loans        Loan[]
+  aiSessions   AiSession[]
+}
+
+model Token {
+  id         String    @id @default(uuid())
+  type       TokenType
+  token      String    @unique
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  consumedAt DateTime?
+  revokedAt  DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  description String // e.g., "Jollibee", "Salary", "Grab"
+  type        TransactionType
+  category    String // e.g., "Food", "Transport", "Shopping"
+  amount      Float
+  date        DateTime // Date of transaction
+  createdAt   DateTime        @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Budget {
+  id           String   @id @default(uuid())
+  month        Int
+  year         Int
+  targetAmount Float    @map("target_amount")
+  amountSpent  Float    @map("amount_spent")
+  createdAt    DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, month, year])
+}
+
+model Loan {
+  id        String     @id @default(uuid())
+  title     String
+  amount    Float
+  status    LoanStatus
+  type      LoanType
+  startDate DateTime   @map("start_date")
+  deadline  DateTime
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model AiSession {
+  id             String   @id @default(uuid())
+  question       String
+  answer         String   @db.Text
+  model          String
+  promptTokens   Int      @map("prompt_tokens")
+  responseTokens Int      @map("response_tokens")
+  totalTokens    Int      @map("total_tokens")
+  createdAt      DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
