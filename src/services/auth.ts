@@ -105,7 +105,7 @@ export const loginUser = async (loginData: any) => {
     throw new Error('Please verify your email address before logging in.');
   }
 
-  // 4. Generate JWT tokens
+  // 4. Generate JWT tokenss
   const accessToken = jwt.sign(
   { userId: user.id, accountRole: user.accountRole, roles: user.roles },
   process.env.JWT_ACCESS_SECRET as string, // Cast as string here
