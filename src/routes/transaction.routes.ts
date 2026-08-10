@@ -5,15 +5,27 @@ import {
     updateTransaction,
     deleteTransaction,
 } from "@/controllers/transaction.controller";
-import { authMiddleware } from "@/middlewares/auth.middleware";
+import { importGCashTransactions } from "@/controllers/gcash.controller";
+import { authenticate } from "@/middlewares/auth.middleware";;
+import multer from "multer";
+
+const upload = multer({
+    storage: multer.memoryStorage(),
+});
 
 const router = Router();
 
-router.use(authMiddleware);
+router.use(authenticate);;
 
 router.get("/", getTransactions);
 router.post("/", createTransaction);
 router.put("/:id", updateTransaction);
 router.delete("/:id", deleteTransaction);
+
+router.post(
+    "/import-gcash",
+    upload.single("file"),
+    importGCashTransactions
+);
 
 export default router;

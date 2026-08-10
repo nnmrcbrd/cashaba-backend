@@ -1,11 +1,13 @@
 import express, { Application, Request, Response } from 'express';
-// If you use cors, uncomment the line below after running: npm i cors @types/cors
-// import cors from 'cors';
+import cors from 'cors';
 
 const app: Application = express();
 
 // Middlewares
-// app.use(cors()); // Uncomment if you need cross-origin requests
+app.use(cors({
+  origin: 'http://localhost:3000',
+  credentials: true
+}));
 app.use(express.json());
 
 // Base Test Route
@@ -23,15 +25,20 @@ app.get('/api/health', (req: Request, res: Response) => {
 });
 
 import authRoutes from './routes/auth.routes.js';
+import transactionRoutes from "./routes/transaction.routes.js";
+import userRoutes from "./routes/user.routes.js";
+import aiRoutes from "./routes/ai.routes.js";
+import budgetRoutes from "./routes/budget.routes.js";
+import loanRoutes from "./routes/loan.routes.js";
+import incomeSetupRoutes from "./routes/incomeSetup.routes.js";
 
 // API Routes
 app.use('/api/auth', authRoutes);
-
-import transactionRoutes from "./routes/transaction.routes.js";
-
-
-app.use(express.json());
-
 app.use("/api/transactions", transactionRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/ai", aiRoutes);
+app.use("/api/budget", budgetRoutes);
+app.use("/api/loans", loanRoutes);
+app.use("/api/income-setup", incomeSetupRoutes);
 
 export default app;

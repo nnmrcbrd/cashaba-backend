@@ -1,9 +1,11 @@
 import { Request, Response } from "express";
-import prisma from "@/prisma/client";
+import { prisma } from "@/lib/prisma";
+import { recalculateSafeToSpend } from "@/utils/safeToSpend";
 
 // CREATE transaction
 export const createTransaction = async (req: Request, res: Response) => {
     try {
+        const userId = req.user!.userId || req.user!.id;
         const { description, type, category, amount, date } = req.body;
 
         const transaction = await prisma.transaction.create({
@@ -11,15 +13,18 @@ export const createTransaction = async (req: Request, res: Response) => {
                 description,
                 type,
                 category,
-                amount,
+                amount: parseFloat(amount),
                 date: date ? new Date(date) : new Date(),
-                userId: req.user!.id, // comes from auth middleware
+                userId,
             },
         });
 
-        res.status(201).json(transaction);
+        const safeToSpend = await recalculateSafeToSpend(userId);
+
+        res.status(201).json({ ...transaction, safeToSpend });
 
     } catch (error) {
+        console.error("createTransaction error:", error);
         res.status(500).json({ message: "Error creating transaction" });
     }
 };
@@ -27,9 +32,10 @@ export const createTransaction = async (req: Request, res: Response) => {
 // GET all transactions of logged-in user
 export const getTransactions = async (req: Request, res: Response) => {
     try {
+        const userId = req.user!.userId || req.user!.id;
         const transactions = await prisma.transaction.findMany({
             where: {
-                userId: req.user!.id,
+                userId,
             },
             orderBy: {
                 createdAt: "desc",
@@ -46,6 +52,7 @@ export const getTransactions = async (req: Request, res: Response) => {
 // UPDATE
 export const updateTransaction = async (req: Request, res: Response) => {
     try {
+        const userId = req.user!.userId || req.user!.id;
         const id = req.params.id as string;
         const { amount, type, category, description, date } = req.body;
 
@@ -54,14 +61,14 @@ export const updateTransaction = async (req: Request, res: Response) => {
             where: { id },
         });
 
-        if (!existing || existing.userId !== req.user!.id) {
+        if (!existing || existing.userId !== userId) {
             return res.status(404).json({ message: "Transaction not found" });
         }
 
         const updated = await prisma.transaction.update({
             where: { id },
             data: {
-                amount,
+                amount: amount ? parseFloat(amount) : undefined,
                 type,
                 category,
                 description,
@@ -69,7 +76,9 @@ export const updateTransaction = async (req: Request, res: Response) => {
             },
         });
 
-        res.json(updated);
+        const safeToSpend = await recalculateSafeToSpend(userId);
+
+        res.json({ ...updated, safeToSpend });
 
     } catch (error) {
         res.status(500).json({ message: "Error updating transaction" });
@@ -79,13 +88,14 @@ export const updateTransaction = async (req: Request, res: Response) => {
 // DELETE
 export const deleteTransaction = async (req: Request, res: Response) => {
     try {
+        const userId = req.user!.userId || req.user!.id;
         const id = req.params.id as string;
 
         const existing = await prisma.transaction.findUnique({
             where: { id },
         });
 
-        if (!existing || existing.userId !== req.user!.id) {
+        if (!existing || existing.userId !== userId) {
             return res.status(404).json({ message: "Transaction not found" });
         }
 
@@ -93,7 +103,9 @@ export const deleteTransaction = async (req: Request, res: Response) => {
             where: { id },
         });
 
-        res.json({ message: "Transaction deleted successfully" });
+        const safeToSpend = await recalculateSafeToSpend(userId);
+
+        res.json({ message: "Transaction deleted successfully", safeToSpend });
 
     } catch (error) {
         res.status(500).json({ message: "Error deleting transaction" });

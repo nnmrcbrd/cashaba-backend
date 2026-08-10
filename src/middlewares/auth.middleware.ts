@@ -21,10 +21,11 @@ export const authenticate = (req: Request, res: Response, next: NextFunction): v
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET as string);
+    const jwtSecret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'no-jwt-key';
+    const decoded = jwt.verify(token, jwtSecret);
     req.user = decoded; // Attach user info to the request object
     next(); // Pass control to the next function
   } catch (error) {
-    res.status(403).json({ message: 'Invalid or expired token.' });
+    res.status(401).json({ message: 'Invalid or expired token.' });
   }
 };

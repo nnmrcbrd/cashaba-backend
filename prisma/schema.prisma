@@ -60,10 +60,15 @@ model User {
   tokens Token[]
 
   // Financial Dashboard Relations
-  transactions Transaction[]
-  budgets      Budget[]
-  loans        Loan[]
-  aiSessions   AiSession[]
+  transactions  Transaction[]
+  budgets       Budget[]
+  loans         Loan[]
+  aiSessions    AiSession[]
+
+  // Phase 2: Income & Safe-to-Spend Relations
+  incomeSetup   IncomeSetup?
+  fixedExpenses FixedExpense[]
+  savingsGoals  SavingsGoal[]
 }
 
 model Token {
@@ -136,6 +141,47 @@ model AiSession {
   responseTokens Int      @map("response_tokens")
   totalTokens    Int      @map("total_tokens")
   createdAt      DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── Phase 2: Income Setup & Safe-to-Spend ───────────────
+
+model IncomeSetup {
+  id           String   @id @default(uuid())
+  totalIncome  Float    @map("total_income")
+  incomePeriod String   @map("income_period") // "weekly" | "monthly"
+  safeToSpend  Float    @default(0) @map("safe_to_spend")
+  updatedAt    DateTime @updatedAt
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model FixedExpense {
+  id        String    @id @default(uuid())
+  name      String
+  amount    Float
+  dueDate   DateTime? @map("due_date")
+  createdAt DateTime  @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model SavingsGoal {
+  id                String   @id @default(uuid())
+  name              String
+  targetAmount      Float    @map("target_amount")
+  currentAmount     Float    @default(0) @map("current_amount")
+  monthlyAllocation Float    @default(0) @map("monthly_allocation")
+  isCompleted       Boolean  @default(false) @map("is_completed")
+  createdAt         DateTime @default(now())
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
