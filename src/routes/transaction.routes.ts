@@ -8,6 +8,8 @@ import {
 import { importGCashTransactions } from "@/controllers/gcash.controller";
 import { authenticate } from "@/middlewares/auth.middleware";;
 import multer from "multer";
+import { importBankCSV } from "@/controllers/bankImport.controller";
+import { scanGCashImage } from "@/controllers/gcashScan.controller";
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -27,5 +29,8 @@ router.post(
     upload.single("file"),
     importGCashTransactions
 );
+
+// Premium: bulk CSV import (BDO, BPI, GCash, UnionBank)
+router.post("/import-csv", importBankCSV);
 
 export default router;

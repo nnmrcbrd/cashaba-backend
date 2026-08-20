@@ -237,6 +237,34 @@ Intents:
       replyContent = `📊 **Financial Summary**:\n• Total Income: ₱${(setup?.totalIncome || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}\n• Safe-to-Spend: ₱${safeToSpend.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n• Recent Transactions: ${recentTx.map(t => `${t.description} (₱${t.amount})`).join(', ') || 'None'}`;
       actionResult = { intent: "SUMMARY", safeToSpend };
     }
+    // Premium: DAILY_BRIEF — proactive financial morning briefing
+    else if (
+      message.toLowerCase().includes("brief") ||
+      message.toLowerCase().includes("morning") ||
+      message.toLowerCase().includes("good morning") ||
+      message.toLowerCase().includes("status update")
+    ) {
+      const safeToSpend = await recalculateSafeToSpend(userId);
+      const setup = await prisma.incomeSetup.findUnique({ where: { userId } });
+      const loans = await prisma.loan.findMany({
+        where: { userId, status: { in: ["ACTIVE", "OVERDUE"] } },
+        orderBy: { deadline: "asc" },
+        take: 3,
+      });
+      const now = new Date();
+      const dayOfWeek = now.toLocaleDateString("en-US", { weekday: "long" });
+
+      const dueSoon = loans.filter((l) => {
+        const diff = (l.deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+        return diff >= 0 && diff <= 3;
+      });
+
+      const greetHour = now.getHours();
+      const greeting = greetHour < 12 ? "Good morning" : greetHour < 17 ? "Good afternoon" : "Good evening";
+
+      replyContent = `${greeting}! ☀️ Here's your ${dayOfWeek} financial brief:\n\n💰 **Safe-to-Spend:** ₱${safeToSpend.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n📊 **Monthly Income:** ₱${(setup?.totalIncome || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}${dueSoon.length > 0 ? `\n\n⚠️ **Upcoming Payments (next 3 days):**\n${dueSoon.map(l => `• ${l.title} — ₱${l.amount.toLocaleString()} due ${new Date(l.deadline).toLocaleDateString("en-PH")}`).join("\n")}` : "\n\n✅ No payments due in the next 3 days."}\n\nStay on track today! You can log expenses, check savings, or ask me anything. 🚀`;
+      actionResult = { intent: "SUMMARY", safeToSpend };
+    }
     else {
       replyContent = parsedResult?.reply || `I heard: "${message}". You can ask me to log expenses, add savings, record debts, or check your Safe-to-Spend!`;
     }

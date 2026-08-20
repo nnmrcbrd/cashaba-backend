@@ -69,6 +69,9 @@ model User {
   incomeSetup   IncomeSetup?
   fixedExpenses FixedExpense[]
   savingsGoals  SavingsGoal[]
+
+  // Premium: Multi-wallet tracking
+  wallets       Wallet[]
 }
 
 model Token {
@@ -97,6 +100,25 @@ model Transaction {
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Premium: optional wallet association (null = unassigned)
+  walletId String? @map("wallet_id")
+  wallet   Wallet? @relation(fields: [walletId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+// Premium Feature #8: Multi-Wallet Tracking
+model Wallet {
+  id        String   @id @default(uuid())
+  name      String   // e.g. "GCash", "BDO", "Cash on Hand"
+  icon      String   @default("💳")
+  color     String   @default("#10b981")
+  createdAt DateTime @default(now())
+
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
 
   @@index([userId])
 }

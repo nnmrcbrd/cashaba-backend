@@ -48,3 +48,37 @@ export const parseGCashCSV = (
             .on("error", reject);
     });
 };
+
+/**
+ * parseGCashImageText
+ * Parses OCR-extracted text from a GCash screenshot to extract amount, description, and date.
+ * Called after Gemini Vision API extracts the text content from the image.
+ */
+export function parseGCashImageText(ocrText: string): GCashRow | null {
+    try {
+        // Extract amount — match "₱1,234.56" or "PHP 1,234.56" or plain "1234.56"
+        const amountMatch = ocrText.match(/(?:₱|PHP\s*)([\d,]+(?:\.\d{1,2})?)/i);
+        if (!amountMatch) return null;
+        const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
+
+        // Extract description — look for "to", "from", "at", merchant name patterns
+        const descriptionMatch =
+            ocrText.match(/(?:sent to|paid to|received from|at|merchant:?)\s*([A-Za-z0-9\s&.'-]{2,40})/i) ||
+            ocrText.match(/([A-Z][A-Za-z0-9\s&.'-]{2,30})\s*(?:₱|PHP)/i);
+        const description = descriptionMatch
+            ? descriptionMatch[1].trim()
+            : "GCash Transaction";
+
+        // Extract date — match common date formats
+        const dateMatch = ocrText.match(
+            /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\w+ \d{1,2},?\s*\d{4}|\d{4}-\d{2}-\d{2})/i
+        );
+        const date = dateMatch
+            ? new Date(dateMatch[1]).toISOString().split("T")[0]
+            : new Date().toISOString().split("T")[0];
+
+        return { amount, description, date };
+    } catch {
+        return null;
+    }
+}
