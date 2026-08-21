@@ -9,7 +9,6 @@ import { importGCashTransactions } from "@/controllers/gcash.controller";
 import { authenticate } from "@/middlewares/auth.middleware";;
 import multer from "multer";
 import { importBankCSV } from "@/controllers/bankImport.controller";
-import { scanGCashImage } from "@/controllers/gcashScan.controller";
 
 const upload = multer({
     storage: multer.memoryStorage(),

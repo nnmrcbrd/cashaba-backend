@@ -14,15 +14,19 @@ export async function recalculateSafeToSpend(userId: string): Promise<number> {
   // 2. Determine period date range
   const now = new Date();
   let periodStart: Date;
+  let periodEnd: Date;
 
   if (setup.incomePeriod === "weekly") {
     // Start of current week (Monday)
     const day = now.getDay();
     const diff = day === 0 ? 6 : day - 1; // Monday = 0 offset
     periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
+    periodEnd = new Date(periodStart);
+    periodEnd.setDate(periodEnd.getDate() + 7);
   } else {
     // Start of current month
     periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   }
   periodStart.setHours(0, 0, 0, 0);
 
@@ -41,7 +45,7 @@ export async function recalculateSafeToSpend(userId: string): Promise<number> {
     where: {
       userId,
       type: "EXPENSE",
-      date: { gte: periodStart },
+      date: { gte: periodStart, lt: periodEnd },
     },
     _sum: { amount: true },
   });

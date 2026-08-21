@@ -1,9 +1,7 @@
 import { Request, Response } from "express";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { prisma } from "@/lib/prisma";
 import { parseBankCSV } from "@/utils/gcashParser";
 import { recalculateSafeToSpend } from "@/utils/safeToSpend";
-import { detectCategory } from "@/utils/detectCategory";
 
 /**
  * POST /api/transactions/import-csv

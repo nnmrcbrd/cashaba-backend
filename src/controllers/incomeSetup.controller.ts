@@ -66,7 +66,7 @@ export const getFixedExpenses = async (req: Request, res: Response) => {
       orderBy: { createdAt: "desc" },
     });
     res.json(expenses);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error fetching fixed expenses" });
   }
 };
@@ -92,7 +92,7 @@ export const addFixedExpense = async (req: Request, res: Response) => {
 
     const safeToSpend = await recalculateSafeToSpend(userId);
     res.status(201).json({ expense, safeToSpend });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error adding fixed expense" });
   }
 };
@@ -101,7 +101,7 @@ export const addFixedExpense = async (req: Request, res: Response) => {
 export const deleteFixedExpense = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId || req.user!.id;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const existing = await prisma.fixedExpense.findUnique({ where: { id } });
     if (!existing || existing.userId !== userId) {
@@ -111,7 +111,7 @@ export const deleteFixedExpense = async (req: Request, res: Response) => {
     await prisma.fixedExpense.delete({ where: { id } });
     const safeToSpend = await recalculateSafeToSpend(userId);
     res.json({ message: "Fixed expense deleted", safeToSpend });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error deleting fixed expense" });
   }
 };
@@ -127,7 +127,7 @@ export const getSavingsGoals = async (req: Request, res: Response) => {
       orderBy: { createdAt: "desc" },
     });
     res.json(goals);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error fetching savings goals" });
   }
 };
@@ -153,7 +153,7 @@ export const addSavingsGoal = async (req: Request, res: Response) => {
 
     const safeToSpend = await recalculateSafeToSpend(userId);
     res.status(201).json({ goal, safeToSpend });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error adding savings goal" });
   }
 };
@@ -162,7 +162,7 @@ export const addSavingsGoal = async (req: Request, res: Response) => {
 export const updateSavingsGoal = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId || req.user!.id;
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { addAmount, isCompleted, monthlyAllocation } = req.body;
 
     const existing = await prisma.savingsGoal.findUnique({ where: { id } });
@@ -197,7 +197,7 @@ export const updateSavingsGoal = async (req: Request, res: Response) => {
 
     const safeToSpend = await recalculateSafeToSpend(userId);
     res.json({ goal, safeToSpend });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error updating savings goal" });
   }
 };
@@ -206,7 +206,7 @@ export const updateSavingsGoal = async (req: Request, res: Response) => {
 export const deleteSavingsGoal = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId || req.user!.id;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const existing = await prisma.savingsGoal.findUnique({ where: { id } });
     if (!existing || existing.userId !== userId) {
@@ -216,7 +216,7 @@ export const deleteSavingsGoal = async (req: Request, res: Response) => {
     await prisma.savingsGoal.delete({ where: { id } });
     const safeToSpend = await recalculateSafeToSpend(userId);
     res.json({ message: "Savings goal deleted", safeToSpend });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error deleting savings goal" });
   }
 };

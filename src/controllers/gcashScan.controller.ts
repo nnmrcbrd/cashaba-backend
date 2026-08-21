@@ -1,8 +1,6 @@
 import { Request, Response } from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { prisma } from "@/lib/prisma";
 import { parseGCashImageText } from "@/utils/gcashParser";
-import { recalculateSafeToSpend } from "@/utils/safeToSpend";
 
 /**
  * POST /api/gcash/scan-image
@@ -12,7 +10,6 @@ import { recalculateSafeToSpend } from "@/utils/safeToSpend";
  */
 export const scanGCashImage = async (req: Request, res: Response) => {
   try {
-    const userId = req.user!.id || req.user!.userId;
     const { base64, mimeType } = req.body;
 
     if (!base64) {
@@ -27,7 +24,7 @@ export const scanGCashImage = async (req: Request, res: Response) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     // Use vision-capable model
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
     const prompt = `This is a GCash or bank payment screenshot. Extract the transaction details and output ONLY a JSON object:
 {

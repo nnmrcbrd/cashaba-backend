@@ -56,7 +56,7 @@ export const createWallet = async (req: Request, res: Response) => {
 export const deleteWallet = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id || req.user!.userId;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const existing = await prisma.wallet.findUnique({ where: { id } });
     if (!existing || existing.userId !== userId) {

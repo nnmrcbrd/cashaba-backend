@@ -25,7 +25,7 @@ export const getBudgets = async (req: Request, res: Response) => {
       where: {
         userId,
         type: "EXPENSE",
-        createdAt: {
+        date: {
           gte: startOfMonth,
           lte: endOfMonth,
         },

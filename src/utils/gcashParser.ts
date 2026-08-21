@@ -49,6 +49,12 @@ export const parseGCashCSV = (
     });
 };
 
+/** Bank imports currently share the normalized CSV shape used by GCash exports. */
+export const parseBankCSV = (
+    buffer: Buffer,
+    _bankType: string = "generic"
+): Promise<GCashRow[]> => parseGCashCSV(buffer);
+
 /**
  * parseGCashImageText
  * Parses OCR-extracted text from a GCash screenshot to extract amount, description, and date.
@@ -71,7 +77,7 @@ export function parseGCashImageText(ocrText: string): GCashRow | null {
 
         // Extract date — match common date formats
         const dateMatch = ocrText.match(
-            /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\w+ \d{1,2},?\s*\d{4}|\d{4}-\d{2}-\d{2})/i
+            /(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\w+ \d{1,2},?\s*\d{4}|\d{4}-\d{2}-\d{2})/i
         );
         const date = dateMatch
             ? new Date(dateMatch[1]).toISOString().split("T")[0]

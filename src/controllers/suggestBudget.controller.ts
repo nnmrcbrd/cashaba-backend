@@ -38,7 +38,7 @@ export const suggestBudget = async (req: Request, res: Response) => {
     if (apiKey && apiKey !== "dummy_gemini_api_key_here") {
       try {
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
         const prompt = `You are a Filipino personal finance advisor.
 The user earns ₱${monthlyIncome.toLocaleString()} per month.

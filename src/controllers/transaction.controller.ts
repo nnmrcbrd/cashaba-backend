@@ -1,19 +1,40 @@
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { recalculateSafeToSpend } from "@/utils/safeToSpend";
+import { z } from "zod";
+
+const transactionSchema = z.object({
+    description: z.string().trim().min(1).max(200),
+    type: z.enum(["INCOME", "EXPENSE"]),
+    category: z.string().trim().min(1).max(50),
+    amount: z.coerce.number().positive().finite(),
+    date: z.string().optional().refine(
+        (value) => !value || !Number.isNaN(new Date(value).getTime()),
+        "A valid date is required",
+    ),
+});
+
+const transactionUpdateSchema = transactionSchema.partial().refine(
+    (data) => Object.keys(data).length > 0,
+    "At least one field is required",
+);
 
 // CREATE transaction
 export const createTransaction = async (req: Request, res: Response) => {
     try {
         const userId = req.user!.userId || req.user!.id;
-        const { description, type, category, amount, date } = req.body;
+        const parsed = transactionSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ message: "Invalid transaction", errors: parsed.error.flatten().fieldErrors });
+        }
+        const { description, type, category, amount, date } = parsed.data;
 
         const transaction = await prisma.transaction.create({
             data: {
                 description,
                 type,
                 category,
-                amount: parseFloat(amount),
+                amount,
                 date: date ? new Date(date) : new Date(),
                 userId,
             },
@@ -44,7 +65,7 @@ export const getTransactions = async (req: Request, res: Response) => {
 
         res.json(transactions);
 
-    } catch (error) {
+    } catch {
         res.status(500).json({ message: "Error fetching transactions" });
     }
 };
@@ -54,7 +75,11 @@ export const updateTransaction = async (req: Request, res: Response) => {
     try {
         const userId = req.user!.userId || req.user!.id;
         const id = req.params.id as string;
-        const { amount, type, category, description, date } = req.body;
+        const parsed = transactionUpdateSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ message: "Invalid transaction update", errors: parsed.error.flatten().fieldErrors });
+        }
+        const { amount, type, category, description, date } = parsed.data;
 
         // check if transaction belongs to user
         const existing = await prisma.transaction.findUnique({
@@ -68,7 +93,7 @@ export const updateTransaction = async (req: Request, res: Response) => {
         const updated = await prisma.transaction.update({
             where: { id },
             data: {
-                amount: amount ? parseFloat(amount) : undefined,
+                amount,
                 type,
                 category,
                 description,
@@ -80,7 +105,7 @@ export const updateTransaction = async (req: Request, res: Response) => {
 
         res.json({ ...updated, safeToSpend });
 
-    } catch (error) {
+    } catch {
         res.status(500).json({ message: "Error updating transaction" });
     }
 };
@@ -107,7 +132,7 @@ export const deleteTransaction = async (req: Request, res: Response) => {
 
         res.json({ message: "Transaction deleted successfully", safeToSpend });
 
-    } catch (error) {
+    } catch {
         res.status(500).json({ message: "Error deleting transaction" });
     }
 };

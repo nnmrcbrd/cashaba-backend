@@ -34,7 +34,7 @@ export const createProCheckout = async (req: Request, res: Response) => {
         );
 
         res.json({ checkoutUrl: response.data.data.attributes.checkout_url });
-    } catch (err) {
+    } catch {
         res.status(500).json({ message: 'Payment initiation failed' });
     }
 

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { processAiChat, getAiHistory } from "@/controllers/ai.controller";
+import { processAiChat, getAiHistory } from "@/controllers/aiCommand.controller";
 import { authenticate } from "@/middlewares/auth.middleware";
 import { suggestBudget } from "@/controllers/suggestBudget.controller";
 

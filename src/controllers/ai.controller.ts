@@ -21,7 +21,7 @@ export const processAiChat = async (req: Request, res: Response) => {
       amount?: number;
       category?: string;
       description?: string;
-      type?: "INCOME" | "EXPENSE";
+      type?: "INCOME" | "EXPENSE" | "BORROWED" | "LENT";
       goalName?: string;
       debtorCreditor?: string;
       dueDate?: string;
@@ -33,7 +33,7 @@ export const processAiChat = async (req: Request, res: Response) => {
     if (apiKey && apiKey !== "dummy_gemini_api_key_here") {
       try {
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
         const prompt = `You are CASHA-BA AI financial assistant.
 Analyze this user command: "${message}".
@@ -133,7 +133,7 @@ Intents:
 
     // 3. Process Intent
     if (parsedResult?.intent === "LOG_TRANSACTION" && parsedResult.amount) {
-      const type = parsedResult.type || "EXPENSE";
+      const type: "INCOME" | "EXPENSE" = parsedResult.type === "INCOME" ? "INCOME" : "EXPENSE";
       const category = parsedResult.category || (type === "INCOME" ? "Income" : "Others");
       const description = parsedResult.description || "Logged via AI";
       const amount = parsedResult.amount;
@@ -207,7 +207,7 @@ Intents:
     else if (parsedResult?.intent === "ADD_DEBT" && parsedResult.amount) {
       const person = parsedResult.debtorCreditor || "Friend";
       const amount = parsedResult.amount;
-      const loanType = parsedResult.type || "BORROWED";
+      const loanType: "BORROWED" | "LENT" = parsedResult.type === "LENT" ? "LENT" : "BORROWED";
 
       await prisma.loan.create({
         data: {
@@ -275,7 +275,7 @@ Intents:
         userId,
         question: message,
         answer: replyContent,
-        model: "gemini-1.5-flash",
+        model: "gemini-3.6-flash",
         promptTokens: 0,
         responseTokens: 0,
         totalTokens: 0,
@@ -303,7 +303,7 @@ export const getAiHistory = async (req: Request, res: Response) => {
       orderBy: { createdAt: "asc" },
     });
     res.json(history);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error fetching AI history" });
   }
 };

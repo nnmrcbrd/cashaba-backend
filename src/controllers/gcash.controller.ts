@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { detectCategory } from "@/utils/detectCategory";
 import { parseGCashCSV } from "@/utils/gcashParser";
+import { recalculateSafeToSpend } from "@/utils/safeToSpend";
 
 export const importGCashTransactions = async (
     req: Request,
@@ -37,9 +38,12 @@ export const importGCashTransactions = async (
             data: parsedTransactions,
         });
 
+        const safeToSpend = await recalculateSafeToSpend(userId);
+
         res.status(201).json({
             message: "GCash transactions imported successfully",
             count: parsedTransactions.length,
+            safeToSpend,
         });
     } catch (error) {
         console.error("GCash import error:", error);

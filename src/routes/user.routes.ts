@@ -30,13 +30,13 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
     }
 
     res.json(user);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error fetching profile" });
   }
 });
 
 // ADMIN MANAGE USERS DASHBOARD ENDPOINT
-router.get('/admin/manage-users', authenticate, async (req: Request, res: Response) => {
+router.get('/admin/manage-users', authenticate, authorize(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const dbUsers = await prisma.user.findMany({
       select: {
@@ -101,12 +101,12 @@ router.get('/admin/manage-users', authenticate, async (req: Request, res: Respon
 });
 
 // ADMIN TOGGLE USER STATUS
-router.patch('/admin/users/:id/status', authenticate, async (req: Request, res: Response) => {
+router.patch('/admin/users/:id/status', authenticate, authorize(['ADMIN']), async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { status } = req.body;
     res.json({ message: `User ${id} status updated to ${status}` });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Error updating user status" });
   }
 });

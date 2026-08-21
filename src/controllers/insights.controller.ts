@@ -84,7 +84,7 @@ User Financial Summary:
     if (apiKey && apiKey !== "dummy_gemini_api_key_here") {
       try {
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
         const prompt = `You are CASHA-BA, a personal finance AI assistant for Filipino users.
 Based on this financial summary, generate EXACTLY 3 short, specific, personalized insight messages.

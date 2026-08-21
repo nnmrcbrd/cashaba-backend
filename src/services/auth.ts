@@ -3,6 +3,42 @@ import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { generateVerificationToken } from '@/utils/token';
 
+const ACCESS_TOKEN_TTL = '15m';
+const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function requiredSecret(name: 'JWT_ACCESS_SECRET' | 'JWT_REFRESH_SECRET'): string {
+  const value = process.env[name] || process.env.JWT_SECRET;
+  if (!value) throw new Error(`${name} is not configured`);
+  return value;
+}
+
+function createAccessToken(user: { id: string; accountRole: string; roles: string[] }): string {
+  return jwt.sign(
+    { userId: user.id, accountRole: user.accountRole, roles: user.roles },
+    requiredSecret('JWT_ACCESS_SECRET'),
+    { expiresIn: ACCESS_TOKEN_TTL },
+  );
+}
+
+async function createRefreshToken(userId: string): Promise<string> {
+  const refreshToken = jwt.sign(
+    { userId },
+    requiredSecret('JWT_REFRESH_SECRET'),
+    { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' } as jwt.SignOptions,
+  );
+
+  await prisma.token.create({
+    data: {
+      token: refreshToken,
+      type: 'REFRESH',
+      expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+      userId,
+    },
+  });
+
+  return refreshToken;
+}
+
 export const registerUser = async (userData: any) => {
   const existingUser = await prisma.user.findUnique({ where: { email: userData.email } });
   if (existingUser) {
@@ -21,7 +57,7 @@ export const registerUser = async (userData: any) => {
         email: userData.email,
         password: hashedPassword,
         gender: userData.gender,
-        roles: userData.roles || [],
+        roles: userData.role || [],
         accountRole: 'USER',
         emailVerified: new Date(),
       },
@@ -106,34 +142,8 @@ export const loginUser = async (loginData: any) => {
     throw new Error('Please verify your email address before logging in.');
   }
 
-  // 4. Generate JWT tokens
-  const accessSecret = (process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'fallback-secret-key') as string;
-  const accessToken = jwt.sign(
-    { userId: user.id, accountRole: user.accountRole, roles: user.roles },
-    accessSecret,
-    { expiresIn: '15m' }
-  );
-
-  const refreshSecret = (process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'fallback-refresh-key') as string;
-  const refreshExpires = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
-
-  const refreshTokenString = jwt.sign(
-    { userId: user.id },
-    refreshSecret,
-    { expiresIn: refreshExpires } as jwt.SignOptions
-  );
-
-  const tokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-
-  // 5. Save the long-lived refresh token in your Token database table
-  await prisma.token.create({
-    data: {
-      token: refreshTokenString,
-      type: 'REFRESH',
-      expiresAt: tokenExpires,
-      userId: user.id,
-    },
-  });
+  const accessToken = createAccessToken(user);
+  const refreshTokenString = await createRefreshToken(user.id);
 
   return {
     user: {
@@ -146,4 +156,49 @@ export const loginUser = async (loginData: any) => {
     accessToken,
     refreshToken: refreshTokenString,
   };
+};
+
+export const refreshUserSession = async (refreshToken: string) => {
+  let decoded: jwt.JwtPayload;
+  try {
+    decoded = jwt.verify(refreshToken, requiredSecret('JWT_REFRESH_SECRET')) as jwt.JwtPayload;
+  } catch {
+    throw new Error('Invalid or expired refresh token');
+  }
+
+  if (typeof decoded.userId !== 'string') throw new Error('Invalid refresh token');
+
+  const storedToken = await prisma.token.findUnique({ where: { token: refreshToken } });
+  if (
+    !storedToken ||
+    storedToken.type !== 'REFRESH' ||
+    storedToken.userId !== decoded.userId ||
+    storedToken.consumedAt ||
+    storedToken.revokedAt ||
+    storedToken.expiresAt <= new Date()
+  ) {
+    throw new Error('Refresh token is no longer active');
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
+  if (!user) throw new Error('User no longer exists');
+
+  // Rotate refresh tokens so a stolen token cannot be reused indefinitely.
+  await prisma.token.update({
+    where: { id: storedToken.id },
+    data: { consumedAt: new Date() },
+  });
+
+  return {
+    accessToken: createAccessToken(user),
+    refreshToken: await createRefreshToken(user.id),
+  };
+};
+
+export const revokeUserSession = async (refreshToken?: string): Promise<void> => {
+  if (!refreshToken) return;
+  await prisma.token.updateMany({
+    where: { token: refreshToken, type: 'REFRESH', revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
 };
