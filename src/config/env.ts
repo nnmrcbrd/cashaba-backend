@@ -6,7 +6,6 @@ export const ENV = {
     PORT: parseInt(process.env.PORT || '8000', 10),
     NODE_ENV: process.env.NODE_ENV || 'development',
     DATABASE_URL: process.env.DATABASE_URL,
-    JWT_SECRET: process.env.JWT_SECRET || 'fallback_secret_change_me',
     FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
     BACKEND_URL: process.env.BACKEND_URL || 'http://localhost:8000',
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,

@@ -1,11 +1,18 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
+interface AuthenticatedUser {
+  userId: string;
+  accountRole: string;
+  roles: string[];
+  id: string;
+}
+
 // Extend the Request interface so TypeScript knows about 'user'
 declare global {
   namespace Express {
     interface Request {
-      user?: any;
+      user?: AuthenticatedUser;
     }
   }
 }
@@ -27,7 +34,21 @@ export const authenticate = (req: Request, res: Response, next: NextFunction): v
       return;
     }
     const decoded = jwt.verify(token, jwtSecret);
-    req.user = decoded; // Attach user info to the request object
+    if (
+      typeof decoded === 'string' ||
+      typeof decoded.userId !== 'string' ||
+      typeof decoded.accountRole !== 'string' ||
+      !Array.isArray(decoded.roles)
+    ) {
+      res.status(401).json({ message: 'Invalid access token payload.' });
+      return;
+    }
+    req.user = {
+      userId: decoded.userId,
+      id: decoded.userId,
+      accountRole: decoded.accountRole,
+      roles: decoded.roles as string[],
+    };
     next(); // Pass control to the next function
   } catch {
     res.status(401).json({ message: 'Invalid or expired token.' });

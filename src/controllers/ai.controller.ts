@@ -237,7 +237,7 @@ Intents:
       replyContent = `📊 **Financial Summary**:\n• Total Income: ₱${(setup?.totalIncome || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}\n• Safe-to-Spend: ₱${safeToSpend.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n• Recent Transactions: ${recentTx.map(t => `${t.description} (₱${t.amount})`).join(', ') || 'None'}`;
       actionResult = { intent: "SUMMARY", safeToSpend };
     }
-    // Premium: DAILY_BRIEF — proactive financial morning briefing
+    // DAILY_BRIEF - proactive financial morning briefing
     else if (
       message.toLowerCase().includes("brief") ||
       message.toLowerCase().includes("morning") ||

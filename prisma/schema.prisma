@@ -60,18 +60,18 @@ model User {
   tokens Token[]
 
   // Financial Dashboard Relations
-  transactions  Transaction[]
-  budgets       Budget[]
-  loans         Loan[]
-  aiSessions    AiSession[]
+  transactions Transaction[]
+  budgets      Budget[]
+  loans        Loan[]
+  aiSessions   AiSession[]
 
   // Phase 2: Income & Safe-to-Spend Relations
   incomeSetup   IncomeSetup?
   fixedExpenses FixedExpense[]
   savingsGoals  SavingsGoal[]
 
-  // Premium: Multi-wallet tracking
-  wallets       Wallet[]
+  // Manual accounts and wallets
+  wallets Wallet[]
 }
 
 model Token {
@@ -101,20 +101,31 @@ model Transaction {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Premium: optional wallet association (null = unassigned)
+  // Optional manual account association (null = unassigned)
   walletId String? @map("wallet_id")
   wallet   Wallet? @relation(fields: [walletId], references: [id], onDelete: SetNull)
 
+  // Loan repayments/collections are ordinary financial movements with a link
+  // back to the obligation that produced them.
+  loanId String? @map("loan_id")
+  loan   Loan?   @relation(fields: [loanId], references: [id], onDelete: SetNull)
+
   @@index([userId])
+  @@index([loanId])
 }
 
-// Premium Feature #8: Multi-Wallet Tracking
+// Manually tracked cash, bank, e-wallet, investment, and credit accounts.
 model Wallet {
-  id        String   @id @default(uuid())
-  name      String   // e.g. "GCash", "BDO", "Cash on Hand"
-  icon      String   @default("💳")
-  color     String   @default("#10b981")
-  createdAt DateTime @default(now())
+  id             String   @id @default(uuid())
+  name           String
+  institution    String?
+  accountType    String   @default("CASH") @map("account_type")
+  kind           String   @default("ASSET")
+  openingBalance Float    @default(0) @map("opening_balance")
+  icon           String   @default("wallet")
+  color          String   @default("#0f766e")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   userId       String
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -147,9 +158,13 @@ model Loan {
   deadline  DateTime
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+  repaymentAmount    Float  @default(0) @map("repayment_amount")
+  repaymentFrequency String @default("ONE_TIME") @map("repayment_frequency")
+  amountPaid         Float  @default(0) @map("amount_paid")
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
 
   @@index([userId, status])
 }

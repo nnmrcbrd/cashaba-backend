@@ -36,13 +36,23 @@ export const parseGCashCSV = (
                     row["Transaction Date"] ??
                     "";
 
-                rows.push({
-                    amount: Number(
-                        String(amountValue).replace(/,/g, "")
-                    ),
-                    description: String(description),
-                    date: String(date),
-                });
+                const amount = Number(String(amountValue).replace(/[₱,\s]/g, ""));
+                const normalizedDate = String(date).trim();
+                const normalizedDescription = String(description).trim();
+
+                if (
+                    Number.isFinite(amount) &&
+                    amount !== 0 &&
+                    normalizedDescription &&
+                    normalizedDate &&
+                    !Number.isNaN(new Date(normalizedDate).getTime())
+                ) {
+                    rows.push({
+                        amount,
+                        description: normalizedDescription.slice(0, 200),
+                        date: normalizedDate,
+                    });
+                }
             })
             .on("end", () => resolve(rows))
             .on("error", reject);
@@ -66,6 +76,7 @@ export function parseGCashImageText(ocrText: string): GCashRow | null {
         const amountMatch = ocrText.match(/(?:₱|PHP\s*)([\d,]+(?:\.\d{1,2})?)/i);
         if (!amountMatch) return null;
         const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
+        if (!Number.isFinite(amount) || amount <= 0) return null;
 
         // Extract description — look for "to", "from", "at", merchant name patterns
         const descriptionMatch =
@@ -79,9 +90,9 @@ export function parseGCashImageText(ocrText: string): GCashRow | null {
         const dateMatch = ocrText.match(
             /(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\w+ \d{1,2},?\s*\d{4}|\d{4}-\d{2}-\d{2})/i
         );
-        const date = dateMatch
-            ? new Date(dateMatch[1]).toISOString().split("T")[0]
-            : new Date().toISOString().split("T")[0];
+        const parsedDate = dateMatch ? new Date(dateMatch[1]) : new Date();
+        if (Number.isNaN(parsedDate.getTime())) return null;
+        const date = parsedDate.toISOString().split("T")[0];
 
         return { amount, description, date };
     } catch {

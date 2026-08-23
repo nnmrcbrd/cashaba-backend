@@ -2,9 +2,14 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { generateVerificationToken } from '@/utils/token';
+import { createHash } from 'crypto';
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function tokenFingerprint(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
 
 function requiredSecret(name: 'JWT_ACCESS_SECRET' | 'JWT_REFRESH_SECRET'): string {
   const value = process.env[name] || process.env.JWT_SECRET;
@@ -29,7 +34,7 @@ async function createRefreshToken(userId: string): Promise<string> {
 
   await prisma.token.create({
     data: {
-      token: refreshToken,
+      token: tokenFingerprint(refreshToken),
       type: 'REFRESH',
       expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
       userId,
@@ -39,47 +44,35 @@ async function createRefreshToken(userId: string): Promise<string> {
   return refreshToken;
 }
 
-export const registerUser = async (userData: any) => {
+interface RegistrationData {
+  firstName: string;
+  lastName: string;
+  email: string;
+  password: string;
+  gender?: string;
+  role?: Array<'STUDENT' | 'WORKING' | 'FREELANCE' | 'MARRIED'>;
+}
+
+export const registerUser = async (userData: RegistrationData) => {
   const existingUser = await prisma.user.findUnique({ where: { email: userData.email } });
   if (existingUser) {
     throw new Error('Email is already registered');
   }
 
   const hashedPassword = await bcrypt.hash(userData.password, 10);
-  const tokenString = generateVerificationToken();
-  const tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); 
-
-  const newUser = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: {
-        firstName: userData.firstName,
-        lastName: userData.lastName,
-        email: userData.email,
-        password: hashedPassword,
-        gender: userData.gender,
-        roles: userData.role || [],
-        accountRole: 'USER',
-        emailVerified: new Date(),
-      },
-    });
-
-    await tx.token.create({
-      data: {
-        token: tokenString,
-        type: 'VERIFICATION',
-        expiresAt: tokenExpires,
-        userId: user.id,
-      },
-    });
-
-    return user;
+  const newUser = await prisma.user.create({
+    data: {
+      firstName: userData.firstName,
+      lastName: userData.lastName,
+      email: userData.email,
+      password: hashedPassword,
+      gender: userData.gender,
+      roles: userData.role || [],
+      accountRole: 'USER',
+      // Email delivery is not configured in the current capstone environment.
+      emailVerified: new Date(),
+    },
   });
-
-  console.log(`\n--- EMAIL MOCK ---`);
-  console.log(`To: ${newUser.email}`);
-  console.log(`Subject: Verify your Casha-Ba Account`);
-  console.log(`Link: http://localhost:8000/api/auth/verify?token=${tokenString}`);
-  console.log(`------------------\n`);
 
   return newUser;
 };
@@ -126,7 +119,10 @@ export const verifyUserEmail = async (tokenString: string) => {
 
 export const loginUser = async (loginData: any) => {
   // 1. Verify existence
-  const user = await prisma.user.findUnique({ where: { email: loginData.email } });
+  const user = await prisma.user.findUnique({
+    where: { email: loginData.email },
+    include: { incomeSetup: { select: { id: true } } },
+  });
   if (!user) {
     throw new Error('Invalid email or password');
   }
@@ -152,6 +148,10 @@ export const loginUser = async (loginData: any) => {
       firstName: user.firstName,
       lastName: user.lastName,
       accountRole: user.accountRole,
+      gender: user.gender,
+      roles: user.roles,
+      createdAt: user.createdAt,
+      onboardingComplete: Boolean(user.incomeSetup),
     },
     accessToken,
     refreshToken: refreshTokenString,
@@ -168,7 +168,9 @@ export const refreshUserSession = async (refreshToken: string) => {
 
   if (typeof decoded.userId !== 'string') throw new Error('Invalid refresh token');
 
-  const storedToken = await prisma.token.findUnique({ where: { token: refreshToken } });
+  const storedToken = await prisma.token.findFirst({
+    where: { token: { in: [tokenFingerprint(refreshToken), refreshToken] } },
+  });
   if (
     !storedToken ||
     storedToken.type !== 'REFRESH' ||
@@ -198,7 +200,69 @@ export const refreshUserSession = async (refreshToken: string) => {
 export const revokeUserSession = async (refreshToken?: string): Promise<void> => {
   if (!refreshToken) return;
   await prisma.token.updateMany({
-    where: { token: refreshToken, type: 'REFRESH', revokedAt: null },
+    where: {
+      token: { in: [tokenFingerprint(refreshToken), refreshToken] },
+      type: 'REFRESH',
+      revokedAt: null,
+    },
     data: { revokedAt: new Date() },
   });
+};
+
+export const changeUserPassword = async (
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> => {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user || !(await bcrypt.compare(currentPassword, user.password))) {
+    throw new Error('Current password is incorrect');
+  }
+
+  const password = await bcrypt.hash(newPassword, 10);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { password } }),
+    prisma.token.updateMany({
+      where: { userId, type: 'REFRESH', revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+  ]);
+};
+
+export const requestPasswordReset = async (email: string): Promise<string | null> => {
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) return null;
+
+  const rawToken = generateVerificationToken();
+  await prisma.token.create({
+    data: {
+      token: tokenFingerprint(rawToken),
+      type: 'PASSWORD_RESET',
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      userId: user.id,
+    },
+  });
+  return rawToken;
+};
+
+export const resetUserPassword = async (rawToken: string, newPassword: string): Promise<void> => {
+  const token = await prisma.token.findFirst({
+    where: {
+      token: { in: [tokenFingerprint(rawToken), rawToken] },
+      type: 'PASSWORD_RESET',
+    },
+  });
+  if (!token || token.expiresAt <= new Date() || token.consumedAt || token.revokedAt) {
+    throw new Error('Invalid or expired password reset token');
+  }
+
+  const password = await bcrypt.hash(newPassword, 10);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: token.userId }, data: { password } }),
+    prisma.token.update({ where: { id: token.id }, data: { consumedAt: new Date() } }),
+    prisma.token.updateMany({
+      where: { userId: token.userId, type: 'REFRESH', revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+  ]);
 };

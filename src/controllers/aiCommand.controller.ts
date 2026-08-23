@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { recalculateSafeToSpend } from "@/utils/safeToSpend";
+import { LoanRepaymentError, recordLoanPayment } from "@/services/loanRepayment";
 
 const EXPENSE_CATEGORIES = [
   "Food & Dining",
@@ -24,6 +25,7 @@ const INTENTS = [
   "CORRECT_CATEGORY",
   "ADD_SAVINGS",
   "ADD_DEBT",
+  "COLLECT_LOAN",
   "SUMMARY",
   "GENERAL",
   "CLARIFY",
@@ -40,6 +42,7 @@ const commandSchema = z.object({
   creditorName: z.string().trim().min(1).nullable().optional(),
   loanType: z.enum(["BORROWED", "LENT"]).nullable().optional(),
   dueDate: z.string().trim().min(1).nullable().optional(),
+  walletName: z.string().trim().min(1).nullable().optional(),
   newCategory: z.enum(EXPENSE_CATEGORIES).nullable().optional(),
   reply: z.string().trim().min(1).nullable().optional(),
   clarificationQuestion: z.string().trim().min(1).nullable().optional(),
@@ -62,6 +65,7 @@ const responseJsonSchema = {
     creditorName: { type: ["string", "null"] },
     loanType: { type: ["string", "null"], enum: ["BORROWED", "LENT", null] },
     dueDate: { type: ["string", "null"], format: "date" },
+    walletName: { type: ["string", "null"] },
     newCategory: { type: ["string", "null"], enum: [...EXPENSE_CATEGORIES, null] },
     reply: { type: ["string", "null"] },
     clarificationQuestion: { type: ["string", "null"] },
@@ -112,6 +116,22 @@ function localFallback(message: string): FinancialCommand {
 
   const amountMatch = message.match(/(?:₱|php\s*)?(\d+(?:\.\d{1,2})?)/i);
   const amount = amountMatch ? Number(amountMatch[1]) : null;
+
+  if (/\b(collected?|repaid|paid me|payment from|received.+from)\b/.test(lower)) {
+    const fromMatch = message.match(/\bfrom\s+([a-z][a-z .'-]*?)(?:\s+(?:on|today|yesterday|into|via)\b|$)/i);
+    const paidMeMatch = message.match(/^\s*([a-z][a-z .'-]*?)\s+(?:paid me|repaid)/i);
+    const person = fromMatch?.[1]?.trim() || paidMeMatch?.[1]?.trim();
+    const walletMatch = message.match(/\b(?:into|via)\s+(?:my\s+)?([a-z0-9 .'-]+)$/i);
+    if (!amount) return { intent: "CLARIFY", clarificationQuestion: "How much did you collect?" };
+    if (!person) return { intent: "CLARIFY", clarificationQuestion: "Who repaid the loan?" };
+    return {
+      intent: "COLLECT_LOAN",
+      amount,
+      creditorName: person,
+      date: null,
+      walletName: walletMatch?.[1]?.trim() || null,
+    };
+  }
 
   if (/\b(save|savings|fund|goal)\b/.test(lower)) {
     const goalMatch = message.match(/(?:to|for)\s+(.+)$/i);
@@ -166,7 +186,7 @@ async function parseWithGemini(message: string): Promise<{ command: FinancialCom
     model,
     contents: message,
     config: {
-      systemInstruction: `You are CASHA-BA's financial command extractor. Today is ${today}. Extract only explicit facts. Never invent an amount, category, description, goal, person, or due date. Use CLARIFY with one concise clarificationQuestion whenever a required value is missing or ambiguous. For expense dates only, use today when no date is stated. GENERAL replies must be concise and must not claim that an action occurred.`,
+      systemInstruction: `You are CASHA-BA's financial command extractor. Today is ${today}. Extract only explicit facts. Never invent an amount, category, description, goal, person, wallet, or due date. Use COLLECT_LOAN only when the user says someone repaid money previously lent to them; put that person's name in creditorName, the collected amount in amount, an explicitly stated account in walletName, and the stated date in date. Do not classify a loan collection as ordinary income. Use CLARIFY with one concise clarificationQuestion whenever a required value is missing or ambiguous. For transaction and collection dates only, use today when no date is stated. GENERAL replies must be concise and must not claim that an action occurred.`,
       responseMimeType: "application/json",
       responseJsonSchema,
       temperature: 0,
@@ -306,10 +326,68 @@ export const processAiChat = async (req: Request, res: Response) => {
               status: "ACTIVE",
               startDate: new Date(),
               deadline: dueDate,
+              repaymentAmount: command.amount,
+              repaymentFrequency: "ONE_TIME",
             },
           });
           safeToSpend = await recalculateSafeToSpend(userId);
           reply = `Recorded ${formatMoney(command.amount)} ${command.loanType === "BORROWED" ? "owed to" : "lent to"} ${command.creditorName}, due ${dueDate.toLocaleDateString("en-PH")}. Your Safe-to-Spend is ${formatMoney(safeToSpend)}.`;
+        }
+      }
+    } else if (command.intent === "COLLECT_LOAN") {
+      if (!command.amount) reply = "How much did you collect?";
+      else if (!command.creditorName) reply = "Who repaid the loan?";
+      else {
+        const loans = await prisma.loan.findMany({
+          where: {
+            userId,
+            type: "LENT",
+            status: { in: ["ACTIVE", "OVERDUE"] },
+            title: { contains: command.creditorName, mode: "insensitive" },
+          },
+          take: 3,
+        });
+
+        if (loans.length === 0) {
+          reply = `I couldn't find an active loan lent to “${command.creditorName}”. Please use the borrower name shown in Debts & Loans.`;
+        } else if (loans.length > 1) {
+          reply = `I found more than one active loan matching “${command.creditorName}”. Please provide the exact loan or borrower name.`;
+        } else {
+          let walletId: string | null = null;
+          if (command.walletName) {
+            const wallets = await prisma.wallet.findMany({
+              where: { userId, name: { contains: command.walletName, mode: "insensitive" } },
+              take: 2,
+            });
+            if (wallets.length === 0) {
+              reply = `I couldn't find an account named “${command.walletName}”. Please use an account name from Wallet & Accounts.`;
+            } else if (wallets.length > 1) {
+              reply = `More than one account matches “${command.walletName}”. Which exact account received the collection?`;
+            } else {
+              walletId = wallets[0].id;
+            }
+          }
+
+          if (!reply) {
+            const paidAt = parseDate(command.date, true);
+            if (!paidAt) reply = "What date was the loan collection received?";
+            else {
+              try {
+                const result = await recordLoanPayment({
+                  userId,
+                  loanId: loans[0].id,
+                  amount: command.amount,
+                  paidAt,
+                  walletId,
+                });
+                safeToSpend = result.safeToSpend;
+                reply = `Recorded ${formatMoney(command.amount)} collected from ${command.creditorName} as Loan Collection income. Remaining amount to collect: ${formatMoney(result.remaining)}${command.walletName ? ` in ${command.walletName}` : ""}.`;
+              } catch (error) {
+                if (error instanceof LoanRepaymentError) reply = error.message;
+                else throw error;
+              }
+            }
+          }
         }
       }
     } else if (command.intent === "SUMMARY") {

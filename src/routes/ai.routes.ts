@@ -10,7 +10,7 @@ router.use(authenticate);
 router.post("/chat", processAiChat);
 router.get("/history", getAiHistory);
 
-// Premium: AI budget suggestion based on income (50/30/20 rule)
+// AI budget suggestion based on income (50/30/20 rule)
 router.post("/suggest-budget", suggestBudget);
 
 export default router;

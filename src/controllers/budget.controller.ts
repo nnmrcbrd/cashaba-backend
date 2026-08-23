@@ -8,7 +8,8 @@ export const getBudgets = async (req: Request, res: Response) => {
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
 
-    // 1. Fetch or create overall monthly budget
+    // Fetch the current budget. Do not invent a default amount: a financial
+    // dashboard must distinguish "not configured" from a real user choice.
     let budget = await prisma.budget.findFirst({
       where: {
         userId,
@@ -34,17 +35,7 @@ export const getBudgets = async (req: Request, res: Response) => {
 
     const totalSpent = expenses.reduce((sum, e) => sum + e.amount, 0);
 
-    if (!budget) {
-      budget = await prisma.budget.create({
-        data: {
-          userId,
-          month: currentMonth,
-          year: currentYear,
-          targetAmount: 20000,
-          amountSpent: totalSpent,
-        },
-      });
-    } else {
+    if (budget) {
       budget = await prisma.budget.update({
         where: { id: budget.id },
         data: { amountSpent: totalSpent },
@@ -68,9 +59,10 @@ export const getBudgets = async (req: Request, res: Response) => {
       { name: "Others", weight: 0.10, icon: "📦" },
     ];
 
+    const targetAmount = budget?.targetAmount ?? 0;
     const categoryBreakdown = standardCategories.map((c) => {
       const catSpent = categoryTotals[c.name] || 0;
-      const catLimit = Math.round(budget!.targetAmount * c.weight);
+      const catLimit = Math.round(targetAmount * c.weight);
       const catPct = Math.min(100, Math.round((catSpent / (catLimit || 1)) * 100));
       return {
         category: c.name,
@@ -84,15 +76,20 @@ export const getBudgets = async (req: Request, res: Response) => {
     });
 
     // 4. Overall alert status
-    const spentPct = Math.min(100, Math.round((totalSpent / (budget.targetAmount || 1)) * 100));
-    const overallStatus = spentPct >= 100 ? "EXCEEDED_100" : spentPct >= 80 ? "WARNING_80" : "NORMAL";
+    const spentPct = targetAmount > 0
+      ? Math.min(100, Math.round((totalSpent / targetAmount) * 100))
+      : 0;
+    const overallStatus = targetAmount === 0
+      ? "NOT_CONFIGURED"
+      : spentPct >= 100 ? "EXCEEDED_100" : spentPct >= 80 ? "WARNING_80" : "NORMAL";
 
     res.json({
       month: currentMonth,
       year: currentYear,
-      targetAmount: budget.targetAmount,
+      configured: Boolean(budget),
+      targetAmount,
       amountSpent: totalSpent,
-      remaining: Math.max(0, budget.targetAmount - totalSpent),
+      remaining: Math.max(0, targetAmount - totalSpent),
       spentPct,
       overallStatus,
       categoryBreakdown,

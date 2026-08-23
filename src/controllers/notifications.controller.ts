@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
+import { calculateSafeToSpend } from "@/utils/safeToSpend";
 
 /**
  * GET /api/notifications
@@ -11,7 +12,10 @@ export const getNotifications = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id || req.user!.userId;
 
-    const [budget, loans, setup] = await Promise.all([
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const [budget, loans, setup, monthlyExpenses] = await Promise.all([
       prisma.budget.findFirst({
         where: { userId },
         orderBy: { createdAt: "desc" },
@@ -20,6 +24,10 @@ export const getNotifications = async (req: Request, res: Response) => {
         where: { userId, status: { in: ["ACTIVE", "OVERDUE"] } },
       }),
       prisma.incomeSetup.findUnique({ where: { userId } }),
+      prisma.transaction.aggregate({
+        where: { userId, type: "EXPENSE", date: { gte: monthStart, lt: monthEnd } },
+        _sum: { amount: true },
+      }),
     ]);
 
     const notifications: {
@@ -31,26 +39,26 @@ export const getNotifications = async (req: Request, res: Response) => {
 
     // Budget threshold alerts
     if (budget && budget.targetAmount > 0) {
-      const spentPct = (budget.amountSpent / budget.targetAmount) * 100;
+      const amountSpent = monthlyExpenses._sum.amount || 0;
+      const spentPct = (amountSpent / budget.targetAmount) * 100;
       if (spentPct >= 100) {
         notifications.push({
           id: "budget-exceeded",
           type: "danger",
           title: "🚨 Budget Exceeded!",
-          message: `You've spent ₱${budget.amountSpent.toLocaleString()} — ${Math.round(spentPct)}% of your ₱${budget.targetAmount.toLocaleString()} monthly budget.`,
+          message: `You've spent ₱${amountSpent.toLocaleString()} — ${Math.round(spentPct)}% of your ₱${budget.targetAmount.toLocaleString()} monthly budget.`,
         });
       } else if (spentPct >= 80) {
         notifications.push({
           id: "budget-warning",
           type: "warning",
           title: "⚠️ Near Budget Limit",
-          message: `You've used ${Math.round(spentPct)}% of your monthly budget. Only ₱${(budget.targetAmount - budget.amountSpent).toLocaleString()} remaining.`,
+          message: `You've used ${Math.round(spentPct)}% of your monthly budget. Only ₱${Math.max(budget.targetAmount - amountSpent, 0).toLocaleString()} remaining.`,
         });
       }
     }
 
     // Overdue loan alerts
-    const now = new Date();
     const overdueLoans = loans.filter(
       (l) => l.status === "OVERDUE" || (l.deadline < now && l.status === "ACTIVE")
     );
@@ -77,21 +85,23 @@ export const getNotifications = async (req: Request, res: Response) => {
       });
     }
 
-    // Low safe-to-spend alert
-    if (setup && setup.safeToSpend < 500 && setup.safeToSpend >= 0) {
-      notifications.push({
-        id: "low-safe-to-spend",
-        type: "warning",
-        title: "💸 Low Safe-to-Spend",
-        message: `Your Safe-to-Spend is ₱${setup.safeToSpend.toLocaleString()}. Consider limiting discretionary spending.`,
-      });
-    }
-    if (setup && setup.safeToSpend < 0) {
+    const safeBreakdown = setup ? await calculateSafeToSpend(userId) : null;
+
+    // The persisted value is clamped to zero, so use the raw calculation to
+    // distinguish low funds from overspending.
+    if (safeBreakdown && safeBreakdown.rawSafeToSpend < 0) {
       notifications.push({
         id: "negative-safe-to-spend",
         type: "danger",
         title: "🚨 Overspent This Period",
-        message: `Your spending has exceeded your income for this period. Review your expenses immediately.`,
+        message: "Your obligations and spending have exceeded your income for this period. Review your expenses immediately.",
+      });
+    } else if (safeBreakdown && safeBreakdown.safeToSpend < 500) {
+      notifications.push({
+        id: "low-safe-to-spend",
+        type: "warning",
+        title: "💸 Low Safe-to-Spend",
+        message: `Your Safe-to-Spend is ₱${safeBreakdown.safeToSpend.toLocaleString()}. Consider limiting discretionary spending.`,
       });
     }
 

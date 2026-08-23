@@ -8,7 +8,7 @@ export const detectCategory = (description: string): string => {
         text.includes("mcdo") ||
         text.includes("mcdonald")
     ) {
-        return "Food";
+        return "Food & Dining";
     }
 
     if (
@@ -17,7 +17,7 @@ export const detectCategory = (description: string): string => {
         text.includes("internet") ||
         text.includes("bill")
     ) {
-        return "Bills";
+        return "Utilities";
     }
 
     if (
@@ -26,7 +26,7 @@ export const detectCategory = (description: string): string => {
         text.includes("joyride") ||
         text.includes("transport")
     ) {
-        return "Transportation";
+        return "Transport";
     }
 
     if (
@@ -46,5 +46,5 @@ export const detectCategory = (description: string): string => {
         return "Salary";
     }
 
-    return "Other";
+    return "Others";
 };

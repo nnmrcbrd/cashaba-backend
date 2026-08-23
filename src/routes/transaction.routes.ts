@@ -6,17 +6,18 @@ import {
     deleteTransaction,
 } from "@/controllers/transaction.controller";
 import { importGCashTransactions } from "@/controllers/gcash.controller";
-import { authenticate } from "@/middlewares/auth.middleware";;
+import { authenticate } from "@/middlewares/auth.middleware";
 import multer from "multer";
 import { importBankCSV } from "@/controllers/bankImport.controller";
 
 const upload = multer({
     storage: multer.memoryStorage(),
+    limits: { fileSize: 2 * 1024 * 1024 },
 });
 
 const router = Router();
 
-router.use(authenticate);;
+router.use(authenticate);
 
 router.get("/", getTransactions);
 router.post("/", createTransaction);
@@ -29,7 +30,7 @@ router.post(
     importGCashTransactions
 );
 
-// Premium: bulk CSV import (BDO, BPI, GCash, UnionBank)
+// Bulk CSV import (BDO, BPI, GCash, UnionBank)
 router.post("/import-csv", importBankCSV);
 
 export default router;

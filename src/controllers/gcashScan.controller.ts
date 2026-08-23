@@ -1,6 +1,19 @@
 import { Request, Response } from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { parseGCashImageText } from "@/utils/gcashParser";
+import { z } from "zod";
+
+const imageInputSchema = z.object({
+  base64: z.string().min(1).max(7_000_000).regex(/^[A-Za-z0-9+/]*={0,2}$/, "Invalid image data"),
+  mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]).default("image/png"),
+});
+
+const extractedTransactionSchema = z.object({
+  amount: z.coerce.number().positive().finite(),
+  description: z.string().trim().min(1).max(200),
+  date: z.string().refine((value) => !Number.isNaN(new Date(value).getTime())),
+  category: z.enum(["Food & Dining", "Transport", "Utilities", "Shopping", "Entertainment", "Health", "Others"]),
+});
 
 /**
  * POST /api/gcash/scan-image
@@ -10,11 +23,11 @@ import { parseGCashImageText } from "@/utils/gcashParser";
  */
 export const scanGCashImage = async (req: Request, res: Response) => {
   try {
-    const { base64, mimeType } = req.body;
-
-    if (!base64) {
-      return res.status(400).json({ message: "base64 image data required" });
+    const input = imageInputSchema.safeParse(req.body);
+    if (!input.success) {
+      return res.status(400).json({ message: "A valid PNG, JPEG, or WebP image is required" });
     }
+    const { base64, mimeType } = input.data;
 
     const apiKey = process.env.GEMINI_API_KEY || "";
 
@@ -40,7 +53,7 @@ If you cannot extract the amount, return null.`;
       {
         inlineData: {
           data: base64,
-          mimeType: mimeType || "image/png",
+          mimeType,
         },
       },
     ]);
@@ -49,9 +62,9 @@ If you cannot extract the amount, return null.`;
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed && parsed.amount > 0) {
-        return res.json({ parsed });
+      const parsed = extractedTransactionSchema.safeParse(JSON.parse(jsonMatch[0]));
+      if (parsed.success) {
+        return res.json({ parsed: parsed.data });
       }
     }
 

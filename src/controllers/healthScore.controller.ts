@@ -16,13 +16,20 @@ export const getHealthScore = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id || req.user!.userId;
 
-    const [setup, savingsGoals, loans, budget] = await Promise.all([
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const [setup, savingsGoals, loans, budget, monthlyExpenses] = await Promise.all([
       prisma.incomeSetup.findUnique({ where: { userId } }),
       prisma.savingsGoal.findMany({ where: { userId, isCompleted: false } }),
-      prisma.loan.findMany({ where: { userId, status: "ACTIVE" } }),
+      prisma.loan.findMany({ where: { userId, status: { in: ["ACTIVE", "OVERDUE"] } } }),
       prisma.budget.findFirst({
         where: { userId },
         orderBy: { createdAt: "desc" },
+      }),
+      prisma.transaction.aggregate({
+        where: { userId, type: "EXPENSE", date: { gte: monthStart, lt: monthEnd } },
+        _sum: { amount: true },
       }),
     ]);
 
@@ -53,7 +60,7 @@ export const getHealthScore = async (req: Request, res: Response) => {
     // 3. Spending control (25 pts)
     let spendingScore = 25;
     if (budget && budget.targetAmount > 0) {
-      const spentRatio = budget.amountSpent / budget.targetAmount;
+      const spentRatio = (monthlyExpenses._sum.amount || 0) / budget.targetAmount;
       if (spentRatio >= 1) spendingScore = 0;
       else if (spentRatio >= 0.9) spendingScore = 10;
       else if (spentRatio >= 0.8) spendingScore = 18;

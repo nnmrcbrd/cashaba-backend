@@ -1,9 +1,18 @@
 import { Request, Response } from 'express';
-import { signupSchema, loginSchema } from '../schema/auth';
+import {
+  changePasswordSchema,
+  forgotPasswordSchema,
+  loginSchema,
+  resetPasswordSchema,
+  signupSchema,
+} from '../schema/auth';
 import {
   loginUser,
+  changeUserPassword,
   refreshUserSession,
   registerUser,
+  requestPasswordReset,
+  resetUserPassword,
   revokeUserSession,
   verifyUserEmail,
 } from '../services/auth';
@@ -22,7 +31,7 @@ export const signup = async (req: Request, res: Response): Promise<void> => {
     const user = await registerUser(validatedData);
 
     res.status(201).json({
-      message: 'User registered successfully. Please check your email to verify.',
+      message: 'User registered successfully.',
       user: {
         id: user.id,
         email: user.email,
@@ -106,5 +115,50 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
   } finally {
     res.clearCookie('refreshToken', refreshCookieOptions);
     res.status(200).json({ message: 'Logged out successfully' });
+  }
+};
+
+export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email } = forgotPasswordSchema.parse(req.body);
+    const token = await requestPasswordReset(email);
+    if (token && process.env.NODE_ENV !== 'production') {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      console.log(`Password reset link for ${email}: ${frontendUrl}/reset-password?token=${token}`);
+    }
+    res.status(200).json({
+      message: 'If an account exists, password reset instructions have been generated.',
+      developmentHint: process.env.NODE_ENV !== 'production' && token
+        ? 'Check the backend terminal for the local reset link.'
+        : undefined,
+    });
+  } catch (error: any) {
+    if (error.name === 'ZodError') res.status(400).json({ message: 'A valid email is required' });
+    else res.status(500).json({ message: 'Unable to start password reset' });
+  }
+};
+
+export const resetPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { token, newPassword } = resetPasswordSchema.parse(req.body);
+    await resetUserPassword(token, newPassword);
+    res.status(200).json({ message: 'Password reset successfully' });
+  } catch (error: any) {
+    if (error.name === 'ZodError') res.status(400).json({ message: error.issues?.[0]?.message || 'Invalid reset request' });
+    else res.status(400).json({ message: error.message || 'Unable to reset password' });
+  }
+};
+
+export const changePassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+    const userId = req.user!.userId || req.user!.id;
+    await changeUserPassword(userId, currentPassword, newPassword);
+    res.clearCookie('refreshToken', refreshCookieOptions);
+    res.status(200).json({ message: 'Password changed successfully. Please log in again.' });
+  } catch (error: any) {
+    if (error.name === 'ZodError') res.status(400).json({ message: error.issues?.[0]?.message || 'Invalid password' });
+    else if (error.message === 'Current password is incorrect') res.status(400).json({ message: error.message });
+    else res.status(500).json({ message: 'Unable to change password' });
   }
 };

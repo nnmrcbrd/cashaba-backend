@@ -1,5 +1,33 @@
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
+import { LoanRepaymentError, recordLoanPayment } from "@/services/loanRepayment";
+import { z } from "zod";
+
+const createLoanSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  amount: z.coerce.number().positive().finite(),
+  status: z.enum(["ACTIVE", "PAID_OFF", "OVERDUE"]).default("ACTIVE"),
+  type: z.enum(["BORROWED", "LENT"]).default("BORROWED"),
+  deadline: z.string().refine(
+    (value) => !Number.isNaN(new Date(value).getTime()),
+    "A valid deadline is required",
+  ),
+  repaymentAmount: z.coerce.number().positive().finite().optional(),
+  repaymentFrequency: z.enum(["WEEKLY", "MONTHLY", "ONE_TIME"]).default("ONE_TIME"),
+});
+
+const loanStatusSchema = z.object({
+  status: z.enum(["ACTIVE", "PAID_OFF", "OVERDUE"]),
+});
+
+const repaymentSchema = z.object({
+  amount: z.coerce.number().positive().finite(),
+  date: z.string().optional().refine(
+    (value) => !value || !Number.isNaN(new Date(value).getTime()),
+    "A valid payment date is required",
+  ),
+  walletId: z.string().uuid().optional().nullable(),
+});
 
 export const getLoans = async (req: Request, res: Response) => {
   try {
@@ -32,6 +60,9 @@ export const getLoans = async (req: Request, res: Response) => {
       .reduce((sum, l) => sum + l.amount, 0);
 
     const overdueCount = loans.filter((l) => l.status === "OVERDUE").length;
+    const scheduledDue = loans
+      .filter((l) => l.type === "BORROWED" && l.status !== "PAID_OFF" && l.deadline <= now)
+      .reduce((sum, l) => sum + Math.min(l.repaymentAmount, Math.max(0, l.amount - l.amountPaid)), 0);
 
     res.json({
       loans,
@@ -39,6 +70,7 @@ export const getLoans = async (req: Request, res: Response) => {
         totalBorrowed,
         totalLent,
         overdueCount,
+        scheduledDue,
       },
     });
   } catch (error) {
@@ -50,21 +82,26 @@ export const getLoans = async (req: Request, res: Response) => {
 export const createLoan = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id || req.user!.userId;
-    const { title, amount, status, type, deadline } = req.body;
-
-    if (!title || !amount) {
-      return res.status(400).json({ message: "title and amount are required" });
+    const parsed = createLoanSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid loan details",
+        errors: parsed.error.flatten().fieldErrors,
+      });
     }
+    const { title, amount, status, type, deadline, repaymentAmount, repaymentFrequency } = parsed.data;
 
     const loan = await prisma.loan.create({
       data: {
         userId,
         title,
-        amount: Number(amount),
-        status: status || "ACTIVE",
-        type: type || "BORROWED",
+        amount,
+        status,
+        type,
         startDate: new Date(),
-        deadline: deadline ? new Date(deadline) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        deadline: new Date(deadline),
+        repaymentAmount: Math.min(repaymentAmount ?? amount, amount),
+        repaymentFrequency,
       },
     });
 
@@ -75,15 +112,37 @@ export const createLoan = async (req: Request, res: Response) => {
   }
 };
 
+export const recordLoanRepayment = async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.id || req.user!.userId;
+    const id = req.params.id as string;
+    const parsed = repaymentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid repayment", errors: parsed.error.flatten().fieldErrors });
+    }
+
+    const { amount, date, walletId } = parsed.data;
+    const paidAt = date ? new Date(date) : new Date();
+    const result = await recordLoanPayment({ userId, loanId: id, amount, paidAt, walletId });
+    return res.json(result);
+  } catch (error) {
+    console.error("Record loan repayment error:", error);
+    if (error instanceof LoanRepaymentError) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    return res.status(500).json({ message: "Error recording loan repayment" });
+  }
+};
+
 export const updateLoanStatus = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id || req.user!.userId;
     const id = req.params.id as string;
-    const { status } = req.body;
-
-    if (!status || !["ACTIVE", "PAID_OFF", "OVERDUE"].includes(status)) {
+    const parsed = loanStatusSchema.safeParse(req.body);
+    if (!parsed.success) {
       return res.status(400).json({ message: "Valid status required (ACTIVE | PAID_OFF | OVERDUE)" });
     }
+    const { status } = parsed.data;
 
     const existing = await prisma.loan.findUnique({ where: { id } });
     if (!existing || existing.userId !== userId) {

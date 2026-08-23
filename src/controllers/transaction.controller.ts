@@ -12,6 +12,7 @@ const transactionSchema = z.object({
         (value) => !value || !Number.isNaN(new Date(value).getTime()),
         "A valid date is required",
     ),
+    walletId: z.string().uuid().optional().nullable(),
 });
 
 const transactionUpdateSchema = transactionSchema.partial().refine(
@@ -27,7 +28,11 @@ export const createTransaction = async (req: Request, res: Response) => {
         if (!parsed.success) {
             return res.status(400).json({ message: "Invalid transaction", errors: parsed.error.flatten().fieldErrors });
         }
-        const { description, type, category, amount, date } = parsed.data;
+        const { description, type, category, amount, date, walletId } = parsed.data;
+        if (walletId) {
+            const wallet = await prisma.wallet.findFirst({ where: { id: walletId, userId } });
+            if (!wallet) return res.status(400).json({ message: "Selected account was not found" });
+        }
 
         const transaction = await prisma.transaction.create({
             data: {
@@ -37,6 +42,7 @@ export const createTransaction = async (req: Request, res: Response) => {
                 amount,
                 date: date ? new Date(date) : new Date(),
                 userId,
+                walletId: walletId || null,
             },
         });
 
@@ -61,6 +67,11 @@ export const getTransactions = async (req: Request, res: Response) => {
             orderBy: {
                 createdAt: "desc",
             },
+            include: {
+                wallet: {
+                    select: { id: true, name: true, color: true },
+                },
+            },
         });
 
         res.json(transactions);
@@ -79,7 +90,7 @@ export const updateTransaction = async (req: Request, res: Response) => {
         if (!parsed.success) {
             return res.status(400).json({ message: "Invalid transaction update", errors: parsed.error.flatten().fieldErrors });
         }
-        const { amount, type, category, description, date } = parsed.data;
+        const { amount, type, category, description, date, walletId } = parsed.data;
 
         // check if transaction belongs to user
         const existing = await prisma.transaction.findUnique({
@@ -88,6 +99,10 @@ export const updateTransaction = async (req: Request, res: Response) => {
 
         if (!existing || existing.userId !== userId) {
             return res.status(404).json({ message: "Transaction not found" });
+        }
+        if (walletId) {
+            const wallet = await prisma.wallet.findFirst({ where: { id: walletId, userId } });
+            if (!wallet) return res.status(400).json({ message: "Selected account was not found" });
         }
 
         const updated = await prisma.transaction.update({
@@ -98,6 +113,7 @@ export const updateTransaction = async (req: Request, res: Response) => {
                 category,
                 description,
                 date: date ? new Date(date) : undefined,
+                walletId,
             },
         });
 

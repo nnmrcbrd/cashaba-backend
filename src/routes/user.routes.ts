@@ -2,13 +2,21 @@ import { Router, Request, Response } from 'express';
 import { authenticate } from '../middlewares/auth.middleware';
 import { prisma } from '@/lib/prisma';
 import { authorize } from '@/middlewares/rbac.middleware';
+import { z } from 'zod';
+
+const profileUpdateSchema = z.object({
+  firstName: z.string().trim().min(1).max(80),
+  lastName: z.string().trim().min(1).max(80),
+  gender: z.string().trim().max(40).nullable().optional(),
+  roles: z.array(z.enum(['STUDENT', 'WORKING', 'FREELANCE', 'MARRIED'])).min(1).max(4),
+});
 
 const router = Router();
 
 // Current User Profile
 router.get('/me', authenticate, async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).user.id || (req as any).user.userId;
+    const userId = req.user!.userId;
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -21,6 +29,7 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
         accountRole: true,
         roles: true,
         createdAt: true,
+        incomeSetup: { select: { id: true } },
       }
     });
 
@@ -29,9 +38,38 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
       return;
     }
 
-    res.json(user);
+    res.json({ ...user, onboardingComplete: Boolean(user.incomeSetup), incomeSetup: undefined });
   } catch {
     res.status(500).json({ message: "Error fetching profile" });
+  }
+});
+
+router.patch('/me', authenticate, async (req: Request, res: Response) => {
+  const parsed = profileUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: 'Invalid profile details', errors: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  try {
+    const user = await prisma.user.update({
+      where: { id: req.user!.userId },
+      data: parsed.data,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        gender: true,
+        accountRole: true,
+        roles: true,
+        createdAt: true,
+        incomeSetup: { select: { id: true } },
+      },
+    });
+    res.json({ ...user, onboardingComplete: Boolean(user.incomeSetup), incomeSetup: undefined });
+  } catch {
+    res.status(500).json({ message: 'Error updating profile' });
   }
 });
 
@@ -50,7 +88,10 @@ router.get('/admin/manage-users', authenticate, authorize(['ADMIN']), async (req
       orderBy: { createdAt: 'desc' },
     });
 
-    const txCount = await prisma.transaction.count();
+    const transactions = await prisma.transaction.findMany({
+      select: { type: true, createdAt: true },
+    });
+    const txCount = transactions.length;
     
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -58,41 +99,48 @@ router.get('/admin/manage-users', authenticate, authorize(['ADMIN']), async (req
       where: { createdAt: { gte: startOfMonth } },
     });
 
-    const mappedUsers = dbUsers.map((u, i) => {
-      const locations = ["Cebu City, PH", "Lapu-Lapu City, PH", "Cordova PH", "Mandaue City, PH"];
+    const mappedUsers = dbUsers.map((u) => {
       return {
         id: u.id,
         name: `${u.firstName} ${u.lastName}`.trim(),
         email: u.email,
-        location: locations[i % locations.length],
-        joinedDate: u.createdAt ? new Date(u.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : "April 20, 2026",
-        status: i === 2 ? "Inactive" : "Active",
+        location: 'Not collected',
+        joinedDate: new Date(u.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+        status: 'Active',
       };
     });
 
-    const totalUsers = Math.max(dbUsers.length, 1256);
-    const activeUsers = Math.max(dbUsers.length, 892);
+    const weekMs = 7 * 24 * 60 * 60 * 1000;
+    const chartData = Array.from({ length: 4 }, (_, index) => {
+      const bucketStart = new Date(now.getTime() - (3 - index) * weekMs);
+      bucketStart.setHours(0, 0, 0, 0);
+      const bucketEnd = new Date(bucketStart.getTime() + weekMs);
+      const bucket = transactions.filter((transaction) => (
+        transaction.createdAt >= bucketStart && transaction.createdAt < bucketEnd
+      ));
+      return {
+        date: bucketStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        green: bucket.filter((transaction) => transaction.type === 'INCOME').length,
+        gray: bucket.filter((transaction) => transaction.type === 'EXPENSE').length,
+      };
+    });
+
+    const weekStart = new Date(now.getTime() - weekMs);
+    const newUsersThisWeek = dbUsers.filter((user) => user.createdAt >= weekStart).length;
+    const weekTransactions = transactions.filter((transaction) => transaction.createdAt >= weekStart).length;
 
     res.json({
       users: mappedUsers,
       metrics: {
-        totalUsers,
-        totalTransactions: Math.max(txCount, 15320),
-        monthTransactions: Math.max(monthTxCount, 6421),
-        activeUsers,
+        totalUsers: dbUsers.length,
+        totalTransactions: txCount,
+        monthTransactions: monthTxCount,
+        activeUsers: dbUsers.length,
+        newUsersThisWeek,
+        weekTransactions,
       },
-      locationBreakdown: [
-        { location: "Cordova", count: 240 },
-        { location: "Cebu City", count: 210 },
-        { location: "Lapu-Lapu City", count: 150 },
-        { location: "Mandaue City", count: 120 },
-      ],
-      chartData: [
-        { date: "April 1", green: 4500, gray: 2800 },
-        { date: "April 15", green: 4200, gray: 2900 },
-        { date: "April 22", green: 4000, gray: 2600 },
-        { date: "April 30", green: 4600, gray: 3100 },
-      ],
+      locationBreakdown: [],
+      chartData,
     });
   } catch (error) {
     console.error("Admin error:", error);
@@ -102,13 +150,9 @@ router.get('/admin/manage-users', authenticate, authorize(['ADMIN']), async (req
 
 // ADMIN TOGGLE USER STATUS
 router.patch('/admin/users/:id/status', authenticate, authorize(['ADMIN']), async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    const { status } = req.body;
-    res.json({ message: `User ${id} status updated to ${status}` });
-  } catch {
-    res.status(500).json({ message: "Error updating user status" });
-  }
+  res.status(501).json({
+    message: 'Account activation status is not available until the approved database field is added.',
+  });
 });
 
 export default router;

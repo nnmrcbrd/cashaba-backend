@@ -2,6 +2,12 @@ import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { parseBankCSV } from "@/utils/gcashParser";
 import { recalculateSafeToSpend } from "@/utils/safeToSpend";
+import { z } from "zod";
+
+const bankImportSchema = z.object({
+  csvBase64: z.string().min(1).max(3_000_000).regex(/^[A-Za-z0-9+/]*={0,2}$/, "Invalid base64 data"),
+  bankType: z.enum(["gcash", "bdo", "bpi", "unionbank", "generic"]).default("generic"),
+});
 
 /**
  * POST /api/transactions/import-csv
@@ -11,14 +17,17 @@ import { recalculateSafeToSpend } from "@/utils/safeToSpend";
 export const importBankCSV = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id || req.user!.userId;
-    const { csvBase64, bankType } = req.body;
-
-    if (!csvBase64) {
-      return res.status(400).json({ message: "csvBase64 required" });
+    const parsedInput = bankImportSchema.safeParse(req.body);
+    if (!parsedInput.success) {
+      return res.status(400).json({ message: "Invalid CSV import request" });
     }
+    const { csvBase64, bankType } = parsedInput.data;
 
     const buffer = Buffer.from(csvBase64, "base64");
-    const rows = await parseBankCSV(buffer, bankType || "generic");
+    if (buffer.byteLength > 2 * 1024 * 1024) {
+      return res.status(413).json({ message: "CSV file must be 2 MB or smaller" });
+    }
+    const rows = await parseBankCSV(buffer, bankType);
 
     if (rows.length === 0) {
       return res.status(422).json({ message: "No valid rows found in CSV" });
@@ -39,9 +48,9 @@ export const importBankCSV = async (req: Request, res: Response) => {
       return {
         userId,
         description: row.description || "Imported Transaction",
-        type: "EXPENSE" as const,
+        type: row.amount < 0 ? ("EXPENSE" as const) : ("INCOME" as const),
         category,
-        amount: row.amount,
+        amount: Math.abs(row.amount),
         date: row.date ? new Date(row.date) : new Date(),
       };
     });

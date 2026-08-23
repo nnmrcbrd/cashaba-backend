@@ -1,6 +1,33 @@
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
-import { recalculateSafeToSpend } from "@/utils/safeToSpend";
+import { calculateSafeToSpend, recalculateSafeToSpend } from "@/utils/safeToSpend";
+import { z } from "zod";
+
+const incomeSetupSchema = z.object({
+  totalIncome: z.coerce.number().positive().finite(),
+  incomePeriod: z.enum(["weekly", "monthly"]),
+});
+
+const fixedExpenseSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  amount: z.coerce.number().positive().finite(),
+  dueDate: z.string().optional().refine(
+    (value) => !value || !Number.isNaN(new Date(value).getTime()),
+    "A valid due date is required",
+  ),
+});
+
+const savingsGoalSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  targetAmount: z.coerce.number().positive().finite(),
+  monthlyAllocation: z.coerce.number().min(0).finite().default(0),
+});
+
+const savingsGoalUpdateSchema = z.object({
+  addAmount: z.coerce.number().positive().finite().optional(),
+  isCompleted: z.boolean().optional(),
+  monthlyAllocation: z.coerce.number().min(0).finite().optional(),
+}).refine((data) => Object.keys(data).length > 0, "At least one change is required");
 
 // ─── Income Setup ────────────────────────────────────
 
@@ -14,9 +41,17 @@ export const getIncomeSetup = async (req: Request, res: Response) => {
       return res.json({ setup: null, safeToSpend: 0 });
     }
 
-    // Recalculate on read to ensure freshness
-    const safeToSpend = await recalculateSafeToSpend(userId);
-    return res.json({ setup: { ...setup, safeToSpend }, safeToSpend });
+    // Recalculate on read and return the exact components used by the dashboard.
+    const breakdown = await calculateSafeToSpend(userId);
+    await prisma.incomeSetup.update({
+      where: { userId },
+      data: { safeToSpend: breakdown.safeToSpend },
+    });
+    return res.json({
+      setup: { ...setup, safeToSpend: breakdown.safeToSpend },
+      safeToSpend: breakdown.safeToSpend,
+      breakdown,
+    });
   } catch (error) {
     console.error("getIncomeSetup error:", error);
     res.status(500).json({ message: "Error fetching income setup" });
@@ -27,22 +62,22 @@ export const getIncomeSetup = async (req: Request, res: Response) => {
 export const upsertIncomeSetup = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId || req.user!.id;
-    const { totalIncome, incomePeriod } = req.body;
-
-    if (!totalIncome || !incomePeriod) {
-      return res.status(400).json({ message: "totalIncome and incomePeriod required" });
+    const parsed = incomeSetupSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid income setup", errors: parsed.error.flatten().fieldErrors });
     }
+    const { totalIncome, incomePeriod } = parsed.data;
 
     const setup = await prisma.incomeSetup.upsert({
       where: { userId },
       create: {
         userId,
-        totalIncome: parseFloat(totalIncome),
+        totalIncome,
         incomePeriod,
-        safeToSpend: parseFloat(totalIncome),
+        safeToSpend: totalIncome,
       },
       update: {
-        totalIncome: parseFloat(totalIncome),
+        totalIncome,
         incomePeriod,
       },
     });
@@ -75,17 +110,17 @@ export const getFixedExpenses = async (req: Request, res: Response) => {
 export const addFixedExpense = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId || req.user!.id;
-    const { name, amount, dueDate } = req.body;
-
-    if (!name || !amount) {
-      return res.status(400).json({ message: "name and amount required" });
+    const parsed = fixedExpenseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid fixed expense", errors: parsed.error.flatten().fieldErrors });
     }
+    const { name, amount, dueDate } = parsed.data;
 
     const expense = await prisma.fixedExpense.create({
       data: {
         userId,
         name,
-        amount: parseFloat(amount),
+        amount,
         dueDate: dueDate ? new Date(dueDate) : null,
       },
     });
@@ -136,18 +171,18 @@ export const getSavingsGoals = async (req: Request, res: Response) => {
 export const addSavingsGoal = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId || req.user!.id;
-    const { name, targetAmount, monthlyAllocation } = req.body;
-
-    if (!name || !targetAmount) {
-      return res.status(400).json({ message: "name and targetAmount required" });
+    const parsed = savingsGoalSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid savings goal", errors: parsed.error.flatten().fieldErrors });
     }
+    const { name, targetAmount, monthlyAllocation } = parsed.data;
 
     const goal = await prisma.savingsGoal.create({
       data: {
         userId,
         name,
-        targetAmount: parseFloat(targetAmount),
-        monthlyAllocation: parseFloat(monthlyAllocation || "0"),
+        targetAmount,
+        monthlyAllocation,
       },
     });
 
@@ -163,18 +198,26 @@ export const updateSavingsGoal = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId || req.user!.id;
     const id = req.params.id as string;
-    const { addAmount, isCompleted, monthlyAllocation } = req.body;
+    const parsed = savingsGoalUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid savings goal update", errors: parsed.error.flatten().fieldErrors });
+    }
+    const { addAmount, isCompleted, monthlyAllocation } = parsed.data;
 
     const existing = await prisma.savingsGoal.findUnique({ where: { id } });
     if (!existing || existing.userId !== userId) {
       return res.status(404).json({ message: "Savings goal not found" });
     }
 
-    const updateData: any = {};
+    const updateData: {
+      currentAmount?: number;
+      isCompleted?: boolean;
+      monthlyAllocation?: number;
+    } = {};
 
     // Add funds to current amount
-    if (addAmount) {
-      const newAmount = existing.currentAmount + parseFloat(addAmount);
+    if (addAmount !== undefined) {
+      const newAmount = existing.currentAmount + addAmount;
       updateData.currentAmount = newAmount;
       // Auto-complete if target reached
       if (newAmount >= existing.targetAmount) {
@@ -187,7 +230,7 @@ export const updateSavingsGoal = async (req: Request, res: Response) => {
     }
 
     if (monthlyAllocation !== undefined) {
-      updateData.monthlyAllocation = parseFloat(monthlyAllocation);
+      updateData.monthlyAllocation = monthlyAllocation;
     }
 
     const goal = await prisma.savingsGoal.update({
