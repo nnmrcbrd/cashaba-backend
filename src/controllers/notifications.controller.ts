@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { calculateSafeToSpend } from "@/utils/safeToSpend";
+import { money } from "@/utils/money";
 
 /**
  * GET /api/notifications
@@ -15,17 +16,19 @@ export const getNotifications = async (req: Request, res: Response) => {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    const [budget, loans, setup, monthlyExpenses] = await Promise.all([
-      prisma.budget.findFirst({
-        where: { userId },
-        orderBy: { createdAt: "desc" },
+    const [budget, loans, obligations, setup, monthlyExpenses] = await Promise.all([
+      prisma.budget.findUnique({
+        where: { userId_month_year: { userId, month: now.getMonth() + 1, year: now.getFullYear() } },
       }),
       prisma.loan.findMany({
         where: { userId, status: { in: ["ACTIVE", "OVERDUE"] } },
       }),
+      prisma.fixedExpense.findMany({
+        where: { userId, status: { in: ["PENDING", "PARTIALLY_PAID", "OVERDUE"] } },
+      }),
       prisma.incomeSetup.findUnique({ where: { userId } }),
       prisma.transaction.aggregate({
-        where: { userId, type: "EXPENSE", date: { gte: monthStart, lt: monthEnd } },
+        where: { userId, type: { in: ["EXPENSE", "BILL_PAYMENT", "DEBT_PAYMENT"] }, deletedAt: null, date: { gte: monthStart, lt: monthEnd } },
         _sum: { amount: true },
       }),
     ]);
@@ -38,22 +41,23 @@ export const getNotifications = async (req: Request, res: Response) => {
     }[] = [];
 
     // Budget threshold alerts
-    if (budget && budget.targetAmount > 0) {
-      const amountSpent = monthlyExpenses._sum.amount || 0;
-      const spentPct = (amountSpent / budget.targetAmount) * 100;
+    if (budget && money(budget.targetAmount) > 0) {
+      const amountSpent = money(monthlyExpenses._sum.amount);
+      const targetAmount = money(budget.targetAmount);
+      const spentPct = (amountSpent / targetAmount) * 100;
       if (spentPct >= 100) {
         notifications.push({
           id: "budget-exceeded",
           type: "danger",
           title: "🚨 Budget Exceeded!",
-          message: `You've spent ₱${amountSpent.toLocaleString()} — ${Math.round(spentPct)}% of your ₱${budget.targetAmount.toLocaleString()} monthly budget.`,
+          message: `You've spent ₱${amountSpent.toLocaleString()} — ${Math.round(spentPct)}% of your ₱${targetAmount.toLocaleString()} monthly budget.`,
         });
       } else if (spentPct >= 80) {
         notifications.push({
           id: "budget-warning",
           type: "warning",
           title: "⚠️ Near Budget Limit",
-          message: `You've used ${Math.round(spentPct)}% of your monthly budget. Only ₱${Math.max(budget.targetAmount - amountSpent, 0).toLocaleString()} remaining.`,
+          message: `You've used ${Math.round(spentPct)}% of your monthly budget. Only ₱${Math.max(targetAmount - amountSpent, 0).toLocaleString()} remaining.`,
         });
       }
     }
@@ -83,6 +87,19 @@ export const getNotifications = async (req: Request, res: Response) => {
         title: "📅 Payment Due Soon",
         message: `${soonLoans.length} loan${soonLoans.length > 1 ? "s" : ""} due within 3 days. Don't forget to pay!`,
       });
+    }
+
+    const overdueObligations = obligations.filter((item) => item.status === "OVERDUE" || (item.dueDate !== null && item.dueDate < now));
+    if (overdueObligations.length > 0) {
+      notifications.push({ id: "obligations-overdue", type: "danger", title: "Bills overdue", message: `${overdueObligations.length} bill or recurring obligation${overdueObligations.length === 1 ? " is" : "s are"} overdue.` });
+    }
+    const upcomingObligations = obligations.filter((item) => {
+      if (!item.dueDate) return false;
+      const days = (item.dueDate.getTime() - now.getTime()) / 86_400_000;
+      return days >= 0 && days <= item.reminderDays;
+    });
+    if (upcomingObligations.length > 0) {
+      notifications.push({ id: "obligations-upcoming", type: "warning", title: "Bills due soon", message: `${upcomingObligations.length} obligation${upcomingObligations.length === 1 ? " is" : "s are"} within its reminder window.` });
     }
 
     const safeBreakdown = setup ? await calculateSafeToSpend(userId) : null;

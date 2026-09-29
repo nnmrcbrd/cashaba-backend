@@ -7,10 +7,11 @@ import {
   recordLoanRepayment,
 } from "@/controllers/loan.controller";
 import { authenticate } from "@/middlewares/auth.middleware";
+import { authorize } from "@/middlewares/rbac.middleware";
 
 const router = Router();
 
-router.use(authenticate);
+router.use(authenticate, authorize(["USER"]));
 
 router.get("/", getLoans);
 router.post("/", createLoan);

@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { authenticate } from "@/middlewares/auth.middleware";
+import { authorize } from "@/middlewares/rbac.middleware";
 import {
   getIncomeSetup,
   upsertIncomeSetup,
   getFixedExpenses,
   addFixedExpense,
+  updateFixedExpense,
   deleteFixedExpense,
   getSavingsGoals,
   addSavingsGoal,
@@ -14,7 +16,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate);
+router.use(authenticate, authorize(["USER"]));
 
 // Income setup
 router.get("/", getIncomeSetup);
@@ -23,6 +25,7 @@ router.post("/", upsertIncomeSetup);
 // Fixed expenses
 router.get("/fixed-expenses", getFixedExpenses);
 router.post("/fixed-expenses", addFixedExpense);
+router.patch("/fixed-expenses/:id", updateFixedExpense);
 router.delete("/fixed-expenses/:id", deleteFixedExpense);
 
 // Savings goals

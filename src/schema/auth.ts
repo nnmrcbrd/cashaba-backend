@@ -3,7 +3,7 @@ import { z } from "zod";
 export const signupSchema = z.object({
     firstName: z.string().trim().min(1, "First name is required").max(80),
     lastName: z.string().trim().min(1, "Last name is required").max(80),
-    gender: z.string().trim().max(40).optional(),
+    gender: z.enum(["Male", "Female"]),
     email: z.string().trim().email("Invalid email address").transform((email) => email.toLowerCase()),
     password: z.string()
       .min(8, "Password must be at least 8 characters")
@@ -29,7 +29,7 @@ export const resetPasswordSchema = z.object({
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, "Current password is required"),
   newPassword: signupSchema.shape.password,
-});
+}).partial({ currentPassword: true });
 
 export const verifyEmailSchema = z.object({
     token: z.string().min(1, "Verification token is required"),

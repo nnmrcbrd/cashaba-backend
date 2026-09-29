@@ -12,9 +12,26 @@ export const ENV = {
 
     SMTP: {
         HOST: process.env.SMTP_HOST,
-        PORT: parseInt(process.env.SMTP_PORT || '8000', 10),
+        PORT: parseInt(process.env.SMTP_PORT || '587', 10),
+        SECURE: process.env.SMTP_SECURE === 'true',
         USER: process.env.SMTP_USER,
         PASS: process.env.SMTP_PASSWORD,
-        FROM: process.env.SMTP_FROM,
+        FROM: process.env.MAIL_FROM,
     }
 };
+
+export function assertProductionConfig() {
+    if ((process.env.NODE_ENV || ENV.NODE_ENV) !== 'production') return;
+    const required = ['DATABASE_URL', 'JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'FRONTEND_URL', 'BACKEND_URL', 'SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM'] as const;
+    const missing = required.filter(name => !process.env[name]?.trim());
+    const billingMode = (process.env.BILLING_MODE || '').toLowerCase();
+    if (!['disabled', 'paymongo'].includes(billingMode)) missing.push('BILLING_MODE' as typeof required[number]);
+    if (billingMode === 'paymongo') {
+        if (!process.env.PAYMONGO_SECRET_KEY?.trim()) missing.push('PAYMONGO_SECRET_KEY' as typeof required[number]);
+        if (!process.env.PAYMONGO_WEBHOOK_SECRET?.trim()) missing.push('PAYMONGO_WEBHOOK_SECRET' as typeof required[number]);
+        if (process.env.PAYMONGO_SECRET_KEY?.trim() && !process.env.PAYMONGO_SECRET_KEY.trim().startsWith('sk_live_')) {
+            throw new Error('Production PayMongo billing requires a live secret key. Payment collection remains pending.');
+        }
+    }
+    if (missing.length) throw new Error(`Missing production configuration: ${[...new Set(missing)].join(', ')}`);
+}

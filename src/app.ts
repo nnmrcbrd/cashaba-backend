@@ -4,14 +4,22 @@ import cookieParser from 'cookie-parser';
 import { prisma } from './lib/prisma.js';
 
 const app: Application = express();
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 
 // Middlewares
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true
 }));
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '5mb', verify: (req, _res, buffer) => { (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer); } }));
 app.use(cookieParser());
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
 
 // Base Test Route
 app.get('/', (req: Request, res: Response) => {
@@ -40,6 +48,7 @@ import aiRoutes from "./routes/ai.routes.js";
 import budgetRoutes from "./routes/budget.routes.js";
 import loanRoutes from "./routes/loan.routes.js";
 import incomeSetupRoutes from "./routes/incomeSetup.routes.js";
+import analyticsRoutes from "./routes/analytics.routes.js";
 
 // Financial intelligence and account routes
 import insightsRoutes from "./routes/insights.routes.js";
@@ -47,6 +56,7 @@ import healthScoreRoutes from "./routes/healthScore.routes.js";
 import notificationsRoutes from "./routes/notifications.routes.js";
 import recurringRoutes from "./routes/recurring.routes.js";
 import walletRoutes from "./routes/wallet.routes.js";
+import subscriptionRoutes from "./routes/subscription.routes.js";
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -56,6 +66,7 @@ app.use("/api/ai", aiRoutes);
 app.use("/api/budget", budgetRoutes);
 app.use("/api/loans", loanRoutes);
 app.use("/api/income-setup", incomeSetupRoutes);
+app.use("/api/analytics", analyticsRoutes);
 
 // Financial intelligence and account routes
 app.use("/api/ai/insights", insightsRoutes);
@@ -63,11 +74,14 @@ app.use("/api/user", healthScoreRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/transactions", recurringRoutes);
 app.use("/api/wallets", walletRoutes);
+app.use("/api/subscriptions", subscriptionRoutes);
 
 // GCash scan-image (inline route — no separate file needed)
 import { scanGCashImage } from "./controllers/gcashScan.controller.js";
 import { authenticate as _auth } from "./middlewares/auth.middleware.js";
-app.post("/api/gcash/scan-image", _auth, scanGCashImage);
+import { authorize as _authorize } from "./middlewares/rbac.middleware.js";
+import { rateLimit as _rateLimit } from './middlewares/rateLimit.middleware.js';
+app.post("/api/gcash/scan-image", _auth, _authorize(['USER']), _rateLimit({ windowMs: 60_000, max: 10 }), scanGCashImage);
 
 app.use((_req: Request, res: Response) => {
   res.status(404).json({ message: 'Route not found' });

@@ -1,69 +1,34 @@
-import { Readable } from "stream";
-import csv from "csv-parser";
-
-export interface GCashRow {
-    amount: number;
-    description: string;
-    date: string;
+import { Readable } from 'stream';
+import csv from 'csv-parser';
+import { FinancialError } from '@/services/financialOperation';
+export interface GCashRow { amount: number; description: string; date: string }
+// Supported contract: Date (YYYY-MM-DD), Description, signed Amount; or Debit/Credit.
+// Bank labels do not imply support for proprietary export formats.
+export function parseBankCSV(buffer: Buffer): Promise<GCashRow[]> {
+  return new Promise((resolve, reject) => {
+    const rows: GCashRow[] = [];
+    let invalid: string | null = null, line = 1;
+    Readable.from(buffer).pipe(csv({ mapHeaders: ({ header }) => header.replace(/^\uFEFF/, '').trim().toLowerCase() }))
+      .on('data', (row: Record<string, string>) => {
+        line++;
+        const description = (row.description ?? row.details ?? '').trim();
+        const date = (row.date ?? row['transaction date'] ?? '').trim();
+        const numeric = (value: string) => Number(value.replace(/[₱,\s]/g, ''));
+        let amount = numeric(row.amount ?? row['transaction amount'] ?? row.transaction_amount ?? '0');
+        if ('debit' in row || 'credit' in row) {
+          const debit = numeric(row.debit || '0'), credit = numeric(row.credit || '0');
+          if (debit < 0 || credit < 0 || (debit > 0 && credit > 0)) invalid ||= 'A row cannot have both a debit and credit';
+          amount = credit - debit;
+        }
+        const parsed = new Date(date + 'T00:00:00Z');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date || !description || description.length > 200 || !Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 999999999999.99 || Math.abs(amount * 100 - Math.round(amount * 100)) > 0.001) invalid ||= 'Invalid row ' + line + '. Use Date (YYYY-MM-DD), Description, and signed Amount (or Debit/Credit), with at most two decimal places.';
+        rows.push({ amount, description, date });
+      })
+      .on('end', () => invalid ? reject(new FinancialError(invalid, 422)) : resolve(rows))
+      .on('error', reject);
+  });
 }
-
-export const parseGCashCSV = (
-    buffer: Buffer
-): Promise<GCashRow[]> => {
-    return new Promise((resolve, reject) => {
-        const rows: GCashRow[] = [];
-
-        Readable.from(buffer)
-            .pipe(csv())
-            .on("data", (row) => {
-                const amountValue =
-                    row.amount ??
-                    row.Amount ??
-                    row.transaction_amount ??
-                    row["Transaction Amount"] ??
-                    "0";
-
-                const description =
-                    row.description ??
-                    row.Description ??
-                    row.details ??
-                    row.Details ??
-                    "";
-
-                const date =
-                    row.date ??
-                    row.Date ??
-                    row["Transaction Date"] ??
-                    "";
-
-                const amount = Number(String(amountValue).replace(/[₱,\s]/g, ""));
-                const normalizedDate = String(date).trim();
-                const normalizedDescription = String(description).trim();
-
-                if (
-                    Number.isFinite(amount) &&
-                    amount !== 0 &&
-                    normalizedDescription &&
-                    normalizedDate &&
-                    !Number.isNaN(new Date(normalizedDate).getTime())
-                ) {
-                    rows.push({
-                        amount,
-                        description: normalizedDescription.slice(0, 200),
-                        date: normalizedDate,
-                    });
-                }
-            })
-            .on("end", () => resolve(rows))
-            .on("error", reject);
-    });
-};
-
-/** Bank imports currently share the normalized CSV shape used by GCash exports. */
-export const parseBankCSV = (
-    buffer: Buffer,
-    _bankType: string = "generic"
-): Promise<GCashRow[]> => parseGCashCSV(buffer);
+export const parseGCashCSV = parseBankCSV;
 
 /**
  * parseGCashImageText

@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
+import { money } from "@/utils/money";
 
 /**
  * GET /api/transactions/recurring
@@ -18,6 +19,7 @@ export const detectRecurring = async (req: Request, res: Response) => {
       where: {
         userId,
         type: "EXPENSE",
+        deletedAt: null,
         date: { gte: thirtyDaysAgo },
       },
       orderBy: { date: "desc" },
@@ -28,9 +30,10 @@ export const detectRecurring = async (req: Request, res: Response) => {
 
     transactions.forEach((t) => {
       // Normalize: round amount to nearest 50, lowercase description stem
-      const key = `${Math.round(t.amount / 50) * 50}-${t.description.toLowerCase().trim().slice(0, 20)}`;
+      const numericAmount = money(t.amount);
+      const key = `${Math.round(numericAmount / 50) * 50}-${t.description.toLowerCase().trim().slice(0, 20)}`;
       if (!patternMap[key]) {
-        patternMap[key] = { count: 0, amount: t.amount, description: t.description, category: t.category };
+        patternMap[key] = { count: 0, amount: numericAmount, description: t.description, category: t.category };
       }
       patternMap[key].count++;
     });

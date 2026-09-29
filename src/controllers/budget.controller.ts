@@ -1,97 +1,66 @@
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
+import { money } from "@/utils/money";
+import { z } from "zod";
+
+const categoriesSchema = z.array(z.object({ category: z.string().trim().min(1).max(50), limitAmount: z.coerce.number().min(0).finite() }))
+  .max(30)
+  .superRefine((categories, context) => {
+    const seen = new Set<string>();
+    categories.forEach((entry, index) => {
+      const key = entry.category.toLocaleLowerCase('en-PH');
+      if (seen.has(key)) context.addIssue({ code: 'custom', path: [index, 'category'], message: 'Budget category names must be unique' });
+      seen.add(key);
+    });
+  });
+const updateSchema = z.object({
+  targetAmount: z.coerce.number().positive().finite(),
+  month: z.coerce.number().int().min(1).max(12).optional(),
+  year: z.coerce.number().int().min(2000).max(2200).optional(),
+  categories: categoriesSchema.optional(),
+});
+
+function selectedMonth(req: Request) {
+  const now = new Date();
+  const month = Number(req.query.month ?? req.body?.month ?? now.getMonth() + 1);
+  const year = Number(req.query.year ?? req.body?.year ?? now.getFullYear());
+  return {
+    month: Number.isInteger(month) && month >= 1 && month <= 12 ? month : now.getMonth() + 1,
+    year: Number.isInteger(year) && year >= 2000 && year <= 2200 ? year : now.getFullYear(),
+  };
+}
 
 export const getBudgets = async (req: Request, res: Response) => {
   try {
-    const userId = req.user!.id || req.user!.userId;
-    const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
-
-    // Fetch the current budget. Do not invent a default amount: a financial
-    // dashboard must distinguish "not configured" from a real user choice.
-    let budget = await prisma.budget.findFirst({
-      where: {
-        userId,
-        month: currentMonth,
-        year: currentYear,
-      },
-    });
-
-    const startOfMonth = new Date(currentYear, currentMonth - 1, 1);
-    const endOfMonth = new Date(currentYear, currentMonth, 0, 23, 59, 59);
-
-    // 2. Fetch all expenses this month
+    const { month, year } = selectedMonth(req);
+    const userId = req.user!.userId;
+    const budget = await prisma.budget.findUnique({ where: { userId_month_year: { userId, month, year } }, include: { categories: true } });
+    const start = new Date(year, month - 1, 1);
+    const end = new Date(year, month, 1);
     const expenses = await prisma.transaction.findMany({
-      where: {
-        userId,
-        type: "EXPENSE",
-        date: {
-          gte: startOfMonth,
-          lte: endOfMonth,
-        },
-      },
+      where: { userId, deletedAt: null, type: { in: ["EXPENSE", "BILL_PAYMENT", "DEBT_PAYMENT"] }, date: { gte: start, lt: end } },
+      select: { amount: true, category: true },
     });
-
-    const totalSpent = expenses.reduce((sum, e) => sum + e.amount, 0);
-
-    if (budget) {
-      budget = await prisma.budget.update({
-        where: { id: budget.id },
-        data: { amountSpent: totalSpent },
-      });
-    }
-
-    // 3. Compute category breakdown
-    const categoryTotals: Record<string, number> = {};
-    expenses.forEach((e) => {
-      const cat = e.category || "Others";
-      categoryTotals[cat] = (categoryTotals[cat] || 0) + e.amount;
-    });
-
-    // Preset standard categories with allocations based on budget ratio
-    const standardCategories = [
-      { name: "Food & Dining", weight: 0.35, icon: "🍱" },
-      { name: "Transport", weight: 0.15, icon: "🚗" },
-      { name: "Utilities", weight: 0.20, icon: "⚡" },
-      { name: "Housing", weight: 0.10, icon: "🏠" },
-      { name: "Shopping", weight: 0.10, icon: "🛍️" },
-      { name: "Others", weight: 0.10, icon: "📦" },
-    ];
-
-    const targetAmount = budget?.targetAmount ?? 0;
-    const categoryBreakdown = standardCategories.map((c) => {
-      const catSpent = categoryTotals[c.name] || 0;
-      const catLimit = Math.round(targetAmount * c.weight);
-      const catPct = Math.min(100, Math.round((catSpent / (catLimit || 1)) * 100));
-      return {
-        category: c.name,
-        icon: c.icon,
-        allocated: catLimit,
-        spent: catSpent,
-        remaining: Math.max(0, catLimit - catSpent),
-        percentage: catPct,
-        status: catPct >= 100 ? "EXCEEDED_100" : catPct >= 80 ? "WARNING_80" : "NORMAL",
-      };
-    });
-
-    // 4. Overall alert status
-    const spentPct = targetAmount > 0
-      ? Math.min(100, Math.round((totalSpent / targetAmount) * 100))
-      : 0;
-    const overallStatus = targetAmount === 0
-      ? "NOT_CONFIGURED"
-      : spentPct >= 100 ? "EXCEEDED_100" : spentPct >= 80 ? "WARNING_80" : "NORMAL";
-
+    const amountSpent = expenses.reduce((sum, expense) => sum + money(expense.amount), 0);
+    if (budget && money(budget.amountSpent) !== amountSpent) await prisma.budget.update({ where: { id: budget.id }, data: { amountSpent } });
+    const categoryTotals = expenses.reduce<Record<string, number>>((totals, expense) => {
+      totals[expense.category || "Others"] = (totals[expense.category || "Others"] || 0) + money(expense.amount);
+      return totals;
+    }, {});
+    const limits = budget?.categories ?? [];
+    const categoryNames = [...new Set([...limits.map((entry) => entry.category), ...Object.keys(categoryTotals)])];
+    const categoryBreakdown = categoryNames.map((category) => {
+      const allocated = money(limits.find((entry) => entry.category === category)?.limitAmount);
+      const spent = categoryTotals[category] || 0;
+      const percentage = allocated > 0 ? Math.round((spent / allocated) * 100) : 0;
+      return { category, allocated, spent, remaining: Math.max(0, allocated - spent), percentage: Math.min(100, percentage), status: allocated <= 0 ? "UNSET" : percentage >= 100 ? "EXCEEDED_100" : percentage >= 80 ? "WARNING_80" : "NORMAL" };
+    }).sort((a, b) => b.spent - a.spent);
+    const targetAmount = money(budget?.targetAmount);
+    const spentPct = targetAmount > 0 ? Math.round((amountSpent / targetAmount) * 100) : 0;
     res.json({
-      month: currentMonth,
-      year: currentYear,
-      configured: Boolean(budget),
-      targetAmount,
-      amountSpent: totalSpent,
-      remaining: Math.max(0, targetAmount - totalSpent),
-      spentPct,
-      overallStatus,
+      month, year, configured: Boolean(budget), targetAmount, amountSpent,
+      remaining: Math.max(0, targetAmount - amountSpent), spentPct: Math.min(100, spentPct),
+      overallStatus: !budget ? "NOT_CONFIGURED" : spentPct >= 100 ? "EXCEEDED_100" : spentPct >= 80 ? "WARNING_80" : "NORMAL",
       categoryBreakdown,
     });
   } catch (error) {
@@ -101,42 +70,43 @@ export const getBudgets = async (req: Request, res: Response) => {
 };
 
 export const updateBudget = async (req: Request, res: Response) => {
+  const parsed = updateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: "Valid budget details required", errors: parsed.error.flatten().fieldErrors });
   try {
-    const userId = req.user!.id || req.user!.userId;
-    const { targetAmount } = req.body;
     const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
-
-    if (!targetAmount || Number(targetAmount) <= 0) {
-      return res.status(400).json({ message: "Valid targetAmount required" });
-    }
-
-    const existing = await prisma.budget.findFirst({
-      where: { userId, month: currentMonth, year: currentYear },
+    const month = parsed.data.month ?? now.getMonth() + 1;
+    const year = parsed.data.year ?? now.getFullYear();
+    const userId = req.user!.userId;
+    const updated = await prisma.budget.upsert({
+      where: { userId_month_year: { userId, month, year } },
+      create: { userId, month, year, targetAmount: parsed.data.targetAmount, amountSpent: 0, categories: parsed.data.categories ? { create: parsed.data.categories } : undefined },
+      update: { targetAmount: parsed.data.targetAmount, categories: parsed.data.categories ? { deleteMany: {}, create: parsed.data.categories } : undefined },
+      include: { categories: true },
     });
-
-    let updated;
-    if (existing) {
-      updated = await prisma.budget.update({
-        where: { id: existing.id },
-        data: { targetAmount: Number(targetAmount) },
-      });
-    } else {
-      updated = await prisma.budget.create({
-        data: {
-          userId,
-          month: currentMonth,
-          year: currentYear,
-          targetAmount: Number(targetAmount),
-          amountSpent: 0,
-        },
-      });
-    }
-
-    res.json(updated);
+    await prisma.user.updateMany({ where: { id: userId, onboardingStep: { lt: 4 } }, data: { onboardingStep: 4 } });
+    res.json({ ...updated, targetAmount: money(updated.targetAmount), amountSpent: money(updated.amountSpent), categories: updated.categories.map((entry) => ({ ...entry, limitAmount: money(entry.limitAmount) })) });
   } catch (error) {
     console.error("Update budget error:", error);
     res.status(500).json({ message: "Error updating budget" });
+  }
+};
+
+export const copyPreviousBudget = async (req: Request, res: Response) => {
+  try {
+    const { month, year } = selectedMonth(req);
+    const current = new Date(year, month - 2, 1);
+    const userId = req.user!.userId;
+    const previous = await prisma.budget.findUnique({ where: { userId_month_year: { userId, month: current.getMonth() + 1, year: current.getFullYear() } }, include: { categories: true } });
+    if (!previous) return res.status(404).json({ message: "No previous-month budget was found" });
+    const copied = await prisma.budget.upsert({
+      where: { userId_month_year: { userId, month, year } },
+      create: { userId, month, year, targetAmount: previous.targetAmount, amountSpent: 0, categories: { create: previous.categories.map((entry) => ({ category: entry.category, limitAmount: entry.limitAmount })) } },
+      update: { targetAmount: previous.targetAmount, categories: { deleteMany: {}, create: previous.categories.map((entry) => ({ category: entry.category, limitAmount: entry.limitAmount })) } },
+      include: { categories: true },
+    });
+    res.json({ ...copied, targetAmount: money(copied.targetAmount), amountSpent: money(copied.amountSpent), categories: copied.categories.map((entry) => ({ ...entry, limitAmount: money(entry.limitAmount) })) });
+  } catch (error) {
+    console.error("Copy budget error:", error);
+    res.status(500).json({ message: "Error copying previous budget" });
   }
 };

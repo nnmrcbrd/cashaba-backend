@@ -1,11 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { prisma } from '@/lib/prisma';
 
 interface AuthenticatedUser {
   userId: string;
   accountRole: string;
   roles: string[];
   id: string;
+  authMethod: 'LOCAL' | 'GOOGLE';
 }
 
 // Extend the Request interface so TypeScript knows about 'user'
@@ -17,7 +19,7 @@ declare global {
   }
 }
 
-export const authenticate = (req: Request, res: Response, next: NextFunction): void => {
+export const authenticate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -43,11 +45,21 @@ export const authenticate = (req: Request, res: Response, next: NextFunction): v
       res.status(401).json({ message: 'Invalid access token payload.' });
       return;
     }
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId }, select: { id: true, accountRole: true, accountStatus: true, roles: true, sessionVersion: true } });
+    if (!user || user.accountStatus === 'SUSPENDED') {
+      res.status(401).json({ message: user ? 'This account has been suspended.' : 'Account no longer exists.' });
+      return;
+    }
+    if (decoded.sessionVersion !== user.sessionVersion) {
+      res.status(401).json({ message: 'Session revoked. Please sign in again.' });
+      return;
+    }
     req.user = {
       userId: decoded.userId,
       id: decoded.userId,
-      accountRole: decoded.accountRole,
-      roles: decoded.roles as string[],
+      accountRole: user.accountRole,
+      roles: user.roles,
+      authMethod: decoded.authMethod === 'GOOGLE' ? 'GOOGLE' : 'LOCAL',
     };
     next(); // Pass control to the next function
   } catch {

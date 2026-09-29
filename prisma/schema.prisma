@@ -15,6 +15,55 @@ enum AccountRole {
 enum TransactionType {
   INCOME
   EXPENSE
+  TRANSFER
+  ADJUSTMENT
+  SAVINGS_CONTRIBUTION
+  SAVINGS_WITHDRAWAL
+  BILL_PAYMENT
+  DEBT_PAYMENT
+  LOAN_COLLECTION
+  LOAN_PROCEEDS
+  LOAN_DISBURSEMENT
+}
+
+enum SubscriptionPlan {
+  FREE
+  PLUS
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ObligationFrequency {
+  ONE_TIME
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum ObligationStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  COMPLETED
+}
+
+enum AiSessionState {
+  COMPLETED
+  NEEDS_CLARIFICATION
+  AWAITING_CONFIRMATION
+  CANCELLED
 }
 
 enum TokenType {
@@ -48,11 +97,22 @@ model User {
   firstName String
   lastName  String
   gender    String?
+  avatarUrl String? @map("avatar_url") @db.Text
 
-  accountRole AccountRole @default(USER)
-  roles       Role[]
+  accountRole           AccountRole   @default(USER)
+  accountStatus         AccountStatus @default(ACTIVE)
+  roles                 Role[]
+  customRole            String?       @map("custom_role")
+  region                String?
+  onboardingStep        Int           @default(1) @map("onboarding_step")
+  onboardingCompletedAt DateTime?     @map("onboarding_completed_at")
+  lastActiveAt          DateTime?     @map("last_active_at")
 
   emailVerified DateTime? @map("email_verified")
+  // Legacy emailVerified values were not proof of mailbox ownership.
+  localCredentialVerified Boolean @default(false) @map("local_credential_verified")
+  googleSubject String? @unique @map("google_subject")
+  sessionVersion Int @default(0) @map("session_version")
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -71,7 +131,64 @@ model User {
   savingsGoals  SavingsGoal[]
 
   // Manual accounts and wallets
-  wallets Wallet[]
+  wallets           Wallet[]
+  adminAuditLogs    AdminAuditLog[]    @relation("AdminActor")
+  transactionAudits TransactionAudit[]
+  financialOperations FinancialOperation[]
+  subscription        Subscription?
+  usagePeriods        UsagePeriod[]
+}
+
+model Subscription {
+  id                     String             @id @default(uuid())
+  userId                 String             @unique
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                   SubscriptionPlan   @default(FREE)
+  status                 SubscriptionStatus @default(ACTIVE)
+  provider               String             @default("INTERNAL")
+  providerCustomerId     String?            @map("provider_customer_id")
+  providerSubscriptionId String?            @unique @map("provider_subscription_id")
+  providerPlanId         String?            @map("provider_plan_id")
+  currentPeriodStart     DateTime            @map("current_period_start")
+  currentPeriodEnd       DateTime            @map("current_period_end")
+  cancelAtPeriodEnd      Boolean             @default(false) @map("cancel_at_period_end")
+  cancelledAt            DateTime?           @map("cancelled_at")
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+}
+
+model UsagePeriod {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  periodStart  DateTime @map("period_start")
+  periodEnd    DateTime @map("period_end")
+  aiRequests   Int      @default(0) @map("ai_requests")
+  receiptScans Int      @default(0) @map("receipt_scans")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, periodStart])
+}
+
+model BillingEvent {
+  id              String   @id @default(uuid())
+  providerEventId String   @unique @map("provider_event_id")
+  type            String
+  payload         Json
+  processedAt     DateTime @default(now()) @map("processed_at")
+}
+
+model FinancialOperation {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key String
+  payloadHash String
+  result Json
+  createdAt DateTime @default(now())
+
+  @@unique([userId, key])
 }
 
 model Token {
@@ -94,7 +211,7 @@ model Transaction {
   description String // e.g., "Jollibee", "Salary", "Grab"
   type        TransactionType
   category    String // e.g., "Food", "Transport", "Shopping"
-  amount      Float
+  amount      Decimal         @db.Decimal(14, 2)
   date        DateTime // Date of transaction
   createdAt   DateTime        @default(now())
 
@@ -103,15 +220,30 @@ model Transaction {
 
   // Optional manual account association (null = unassigned)
   walletId String? @map("wallet_id")
-  wallet   Wallet? @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  wallet   Wallet? @relation("SourceWalletTransactions", fields: [walletId], references: [id], onDelete: SetNull)
+
+  destinationWalletId String? @map("destination_wallet_id")
+  destinationWallet   Wallet? @relation("DestinationWalletTransactions", fields: [destinationWalletId], references: [id], onDelete: SetNull)
 
   // Loan repayments/collections are ordinary financial movements with a link
   // back to the obligation that produced them.
   loanId String? @map("loan_id")
   loan   Loan?   @relation(fields: [loanId], references: [id], onDelete: SetNull)
 
+  savingsGoalId String?      @map("savings_goal_id")
+  savingsGoal   SavingsGoal? @relation(fields: [savingsGoalId], references: [id], onDelete: SetNull)
+
+  fixedExpenseId String?       @map("fixed_expense_id")
+  fixedExpense   FixedExpense? @relation(fields: [fixedExpenseId], references: [id], onDelete: SetNull)
+
+  deletedAt DateTime?          @map("deleted_at")
+  audits    TransactionAudit[]
+
   @@index([userId])
   @@index([loanId])
+  @@index([destinationWalletId])
+  @@index([savingsGoalId])
+  @@index([fixedExpenseId])
 }
 
 // Manually tracked cash, bank, e-wallet, investment, and credit accounts.
@@ -120,16 +252,19 @@ model Wallet {
   name           String
   institution    String?
   accountType    String   @default("CASH") @map("account_type")
+  customType     String?  @map("custom_type")
   kind           String   @default("ASSET")
-  openingBalance Float    @default(0) @map("opening_balance")
+  openingBalance Decimal  @default(0) @map("opening_balance") @db.Decimal(14, 2)
   icon           String   @default("wallet")
   color          String   @default("#0f766e")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  userId       String
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
+  userId            String
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions      Transaction[]  @relation("SourceWalletTransactions")
+  incomingTransfers Transaction[]  @relation("DestinationWalletTransactions")
+  fixedExpenses     FixedExpense[]
 
   @@index([userId])
 }
@@ -138,46 +273,61 @@ model Budget {
   id           String   @id @default(uuid())
   month        Int
   year         Int
-  targetAmount Float    @map("target_amount")
-  amountSpent  Float    @map("amount_spent")
+  targetAmount Decimal  @map("target_amount") @db.Decimal(14, 2)
+  amountSpent  Decimal  @map("amount_spent") @db.Decimal(14, 2)
   createdAt    DateTime @default(now())
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categories BudgetCategory[]
 
-  @@index([userId, month, year])
+  @@unique([userId, month, year])
+}
+
+model BudgetCategory {
+  id          String  @id @default(uuid())
+  category    String
+  limitAmount Decimal @map("limit_amount") @db.Decimal(14, 2)
+  budgetId    String
+  budget      Budget  @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  @@unique([budgetId, category])
 }
 
 model Loan {
-  id        String     @id @default(uuid())
-  title     String
-  amount    Float
-  status    LoanStatus
-  type      LoanType
-  startDate DateTime   @map("start_date")
-  deadline  DateTime
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  repaymentAmount    Float  @default(0) @map("repayment_amount")
-  repaymentFrequency String @default("ONE_TIME") @map("repayment_frequency")
-  amountPaid         Float  @default(0) @map("amount_paid")
+  id                 String     @id @default(uuid())
+  title              String
+  amount             Decimal    @db.Decimal(14, 2)
+  status             LoanStatus
+  type               LoanType
+  startDate          DateTime   @map("start_date")
+  deadline           DateTime
+  scheduleAnchor     DateTime? @map("schedule_anchor")
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  repaymentAmount    Decimal    @default(0) @map("repayment_amount") @db.Decimal(14, 2)
+  repaymentFrequency String     @default("ONE_TIME") @map("repayment_frequency")
+  amountPaid         Decimal    @default(0) @map("amount_paid") @db.Decimal(14, 2)
+  installmentPaid    Decimal    @default(0) @map("installment_paid") @db.Decimal(14, 2)
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions Transaction[]
 
   @@index([userId, status])
 }
 
 model AiSession {
-  id             String   @id @default(uuid())
+  id             String         @id @default(uuid())
   question       String
-  answer         String   @db.Text
+  answer         String         @db.Text
   model          String
-  promptTokens   Int      @map("prompt_tokens")
-  responseTokens Int      @map("response_tokens")
-  totalTokens    Int      @map("total_tokens")
-  createdAt      DateTime @default(now())
+  promptTokens   Int            @map("prompt_tokens")
+  responseTokens Int            @map("response_tokens")
+  totalTokens    Int            @map("total_tokens")
+  state          AiSessionState @default(COMPLETED)
+  pendingAction  Json?          @map("pending_action")
+  createdAt      DateTime       @default(now())
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -189,9 +339,9 @@ model AiSession {
 
 model IncomeSetup {
   id           String   @id @default(uuid())
-  totalIncome  Float    @map("total_income")
+  totalIncome  Decimal  @map("total_income") @db.Decimal(14, 2)
   incomePeriod String   @map("income_period") // "weekly" | "monthly"
-  safeToSpend  Float    @default(0) @map("safe_to_spend")
+  safeToSpend  Decimal  @default(0) @map("safe_to_spend") @db.Decimal(14, 2)
   updatedAt    DateTime @updatedAt
 
   userId String @unique
@@ -199,14 +349,24 @@ model IncomeSetup {
 }
 
 model FixedExpense {
-  id        String    @id @default(uuid())
-  name      String
-  amount    Float
-  dueDate   DateTime? @map("due_date")
-  createdAt DateTime  @default(now())
+  id           String              @id @default(uuid())
+  name         String
+  amount       Decimal             @db.Decimal(14, 2)
+  amountPaid   Decimal             @default(0) @map("amount_paid") @db.Decimal(14, 2)
+  dueDate      DateTime?           @map("due_date")
+  scheduleAnchor DateTime? @map("schedule_anchor")
+  frequency    ObligationFrequency @default(MONTHLY)
+  status       ObligationStatus    @default(PENDING)
+  category     String              @default("Bills")
+  reminderDays Int                 @default(3) @map("reminder_days")
+  walletId     String?             @map("wallet_id")
+  updatedAt    DateTime            @updatedAt
+  createdAt    DateTime            @default(now())
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet       Wallet?       @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  transactions Transaction[]
 
   @@index([userId])
 }
@@ -214,14 +374,41 @@ model FixedExpense {
 model SavingsGoal {
   id                String   @id @default(uuid())
   name              String
-  targetAmount      Float    @map("target_amount")
-  currentAmount     Float    @default(0) @map("current_amount")
-  monthlyAllocation Float    @default(0) @map("monthly_allocation")
+  targetAmount      Decimal  @map("target_amount") @db.Decimal(14, 2)
+  currentAmount     Decimal  @default(0) @map("current_amount") @db.Decimal(14, 2)
+  monthlyAllocation Decimal  @default(0) @map("monthly_allocation") @db.Decimal(14, 2)
   isCompleted       Boolean  @default(false) @map("is_completed")
   createdAt         DateTime @default(now())
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
 
   @@index([userId])
+}
+
+model TransactionAudit {
+  id            String      @id @default(uuid())
+  action        String
+  snapshot      Json
+  createdAt     DateTime    @default(now())
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId, createdAt])
+}
+
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id")
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  actorId    String
+  actor      User     @relation("AdminActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([actorId, createdAt])
 }

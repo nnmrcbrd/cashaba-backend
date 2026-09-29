@@ -4,9 +4,11 @@ import {
     createTransaction,
     updateTransaction,
     deleteTransaction,
+    undoLastTransaction,
 } from "@/controllers/transaction.controller";
 import { importGCashTransactions } from "@/controllers/gcash.controller";
 import { authenticate } from "@/middlewares/auth.middleware";
+import { authorize } from "@/middlewares/rbac.middleware";
 import multer from "multer";
 import { importBankCSV } from "@/controllers/bankImport.controller";
 
@@ -17,10 +19,11 @@ const upload = multer({
 
 const router = Router();
 
-router.use(authenticate);
+router.use(authenticate, authorize(["USER"]));
 
 router.get("/", getTransactions);
 router.post("/", createTransaction);
+router.post("/undo", undoLastTransaction);
 router.put("/:id", updateTransaction);
 router.delete("/:id", deleteTransaction);
 

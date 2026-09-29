@@ -1,125 +1,72 @@
-import { prisma } from "@/lib/prisma";
+import { prisma } from '@/lib/prisma';
+import type { FinancialTx } from '@/services/financialOperation';
+import { money, roundMoney } from '@/utils/money';
+import { occurrencesBefore } from '@/utils/recurrence';
 
-/**
- * Safe-to-Spend = Total Income − SUM(Fixed Expenses) − SUM(Savings Allocations) − SUM(Expenses this period)
- * 
- * "This period" = current week if income_period is "weekly", current month if "monthly".
- * Result clamped to ₱0.00 minimum. Updates IncomeSetup.safeToSpend after calculation.
- */
 export interface SafeToSpendBreakdown {
-  totalIncome: number;
-  totalFixed: number;
-  totalSavings: number;
-  totalExpenses: number;
-  totalLoanRepayments: number;
-  rawSafeToSpend: number;
-  safeToSpend: number;
+  configuredIncome: number; actualIncome: number; totalIncome: number; totalFixed: number;
+  totalSavings: number; totalExpenses: number; totalLoanRepayments: number;
+  rawSafeToSpend: number; safeToSpend: number; periodStart: string; periodEnd: string;
 }
-
-export async function calculateSafeToSpend(userId: string): Promise<SafeToSpendBreakdown> {
-  // 1. Get income setup
-  const setup = await prisma.incomeSetup.findUnique({ where: { userId } });
-  if (!setup) {
-    return {
-      totalIncome: 0,
-      totalFixed: 0,
-      totalSavings: 0,
-      totalExpenses: 0,
-      totalLoanRepayments: 0,
-      rawSafeToSpend: 0,
-      safeToSpend: 0,
-    };
+// Configured income is a planning target. Safe-to-Spend represents money that
+// has actually arrived, so expected pay never becomes spendable prematurely.
+export function effectivePeriodIncome(configuredIncome: number, actualIncome: number) {
+  void configuredIncome;
+  return roundMoney(money(actualIncome));
+}
+export function periodRange(period: string, now = new Date()) {
+  if (period === 'weekly') {
+    const offset = now.getDay() === 0 ? 6 : now.getDay() - 1;
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+    const end = new Date(start); end.setDate(end.getDate() + 7);
+    return { start, end };
   }
-
-  // 2. Determine period date range
-  const now = new Date();
-  let periodStart: Date;
-  let periodEnd: Date;
-
-  if (setup.incomePeriod === "weekly") {
-    // Start of current week (Monday)
-    const day = now.getDay();
-    const diff = day === 0 ? 6 : day - 1; // Monday = 0 offset
-    periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
-    periodEnd = new Date(periodStart);
-    periodEnd.setDate(periodEnd.getDate() + 7);
-  } else {
-    // Start of current month
-    periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: new Date(now.getFullYear(), now.getMonth() + 1, 1) };
+}
+export function scheduledReserve(input: { amount: number; paid: number; due: Date | null; anchor?: Date | null; frequency: string; end: Date; remaining?: number }) {
+  const count = input.due ? input.frequency === 'ONE_TIME' ? Number(input.due < input.end) : Math.max(0, occurrencesBefore(input.anchor ?? input.due, input.frequency, input.end) - occurrencesBefore(input.anchor ?? input.due, input.frequency, input.due)) : 1;
+  return roundMoney(Math.min(input.remaining ?? Infinity, Math.max(0, count * input.amount - input.paid)));
+}
+export function savingsReserve(goals: Array<{ id: string; currentAmount: unknown; targetAmount: unknown; monthlyAllocation: unknown; isCompleted: boolean }>, movements: Array<{ type: string; amount: unknown; savingsGoalId: string | null }>, period: string) {
+  const net = new Map<string, number>();
+  for (const movement of movements) {
+    if (!['SAVINGS_CONTRIBUTION', 'SAVINGS_WITHDRAWAL'].includes(movement.type)) continue;
+    const id = movement.savingsGoalId ?? 'unlinked';
+    net.set(id, roundMoney((net.get(id) ?? 0) + (movement.type === 'SAVINGS_WITHDRAWAL' ? -1 : 1) * money(movement.amount)));
   }
-  periodStart.setHours(0, 0, 0, 0);
-
-  // 3. Sum fixed expenses
-  const fixedExpenses = await prisma.fixedExpense.findMany({ where: { userId } });
-  const totalFixed = fixedExpenses.reduce((sum, fe) => sum + fe.amount, 0);
-
-  // 4. Sum savings allocations (monthly allocations from active goals)
-  const savingsGoals = await prisma.savingsGoal.findMany({
-    where: { userId, isCompleted: false },
-  });
-  const totalSavings = savingsGoals.reduce((sum, sg) => sum + sg.monthlyAllocation, 0);
-
-  // 5. Sum expenses logged this period
-  const expensesThisPeriod = await prisma.transaction.aggregate({
-    where: {
-      userId,
-      type: "EXPENSE",
-      date: { gte: periodStart, lt: periodEnd },
-    },
-    _sum: { amount: true },
-  });
-  const totalExpenses = expensesThisPeriod._sum.amount || 0;
-
-  // Reserve borrowed-loan repayments due during or before this period.
-  const dueLoans = await prisma.loan.findMany({
-    where: {
-      userId,
-      type: "BORROWED",
-      status: { in: ["ACTIVE", "OVERDUE"] },
-      repaymentAmount: { gt: 0 },
-      deadline: { lt: periodEnd },
-    },
-    select: { amount: true, amountPaid: true, repaymentAmount: true },
-  });
-  const totalLoanRepayments = dueLoans.reduce(
-    (sum, loan) => sum + Math.min(loan.repaymentAmount, Math.max(0, loan.amount - loan.amountPaid)),
-    0,
-  );
-
-  // 6. Calculate and clamp
-  const rawSafeToSpend = setup.totalIncome - totalFixed - totalSavings - totalLoanRepayments - totalExpenses;
-  const safeToSpend = Math.max(0, rawSafeToSpend);
-
-  return {
-    totalIncome: setup.totalIncome,
-    totalFixed,
-    totalSavings,
-    totalExpenses,
-    totalLoanRepayments,
-    rawSafeToSpend,
-    safeToSpend,
-  };
+  let total = 0;
+  for (const goal of goals) {
+    const actual = Math.max(0, net.get(goal.id) ?? 0);
+    const planned = goal.isCompleted ? 0 : money(goal.monthlyAllocation) / (period === 'weekly' ? 4.33 : 1);
+    const remainingPlan = Math.min(Math.max(0, planned - actual), Math.max(0, money(goal.targetAmount) - money(goal.currentAmount)));
+    total += actual + remainingPlan;
+    net.delete(goal.id);
+  }
+  for (const amount of net.values()) total += Math.max(0, amount);
+  return roundMoney(total);
 }
-
-export async function recalculateSafeToSpend(userId: string): Promise<number> {
-  const breakdown = await calculateSafeToSpend(userId);
-  const setup = await prisma.incomeSetup.findUnique({ where: { userId }, select: { id: true } });
-  if (!setup) return 0;
-
-  // 7. Persist updated value
-  await prisma.incomeSetup.update({
-    where: { userId },
-    data: { safeToSpend: breakdown.safeToSpend },
-  });
-
-  return breakdown.safeToSpend;
+export async function calculateSafeToSpendInTransaction(tx: FinancialTx, userId: string, now = new Date()): Promise<SafeToSpendBreakdown> {
+  const setup = await tx.incomeSetup.findUnique({ where: { userId } });
+  const { start, end } = periodRange(setup?.incomePeriod ?? 'monthly', now);
+  const [bills, goals, movements, loans] = await Promise.all([
+    tx.fixedExpense.findMany({ where: { userId, status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] }, OR: [{ dueDate: { lt: end } }, { dueDate: null }] } }),
+    tx.savingsGoal.findMany({ where: { userId } }),
+    tx.transaction.findMany({ where: { userId, deletedAt: null, date: { gte: start, lt: end } }, select: { type: true, amount: true, savingsGoalId: true } }),
+    tx.loan.findMany({ where: { userId, type: 'BORROWED', status: { in: ['ACTIVE', 'OVERDUE'] }, deadline: { lt: end } } }),
+  ]);
+  const totals = new Map<string, number>();
+  for (const row of movements) totals.set(row.type, (totals.get(row.type) ?? 0) + money(row.amount));
+  const actualIncome = totals.get('INCOME') ?? 0;
+  const configuredIncome = money(setup?.totalIncome);
+  const totalIncome = effectivePeriodIncome(configuredIncome, actualIncome);
+  const totalFixed = roundMoney(bills.reduce((sum, bill) => sum + scheduledReserve({ amount: money(bill.amount), paid: money(bill.amountPaid), due: bill.dueDate, anchor: bill.scheduleAnchor, frequency: bill.frequency, end }), 0));
+  const totalLoanRepayments = roundMoney(loans.reduce((sum, loan) => sum + scheduledReserve({ amount: money(loan.repaymentAmount) || money(loan.amount), paid: money(loan.installmentPaid), due: loan.deadline, anchor: loan.scheduleAnchor, frequency: loan.repaymentFrequency, end, remaining: Math.max(0, money(loan.amount) - money(loan.amountPaid)) }), 0));
+  const totalSavings = savingsReserve(goals, movements, setup?.incomePeriod ?? 'monthly');
+  const totalExpenses = roundMoney(['EXPENSE', 'BILL_PAYMENT', 'DEBT_PAYMENT'].reduce((sum, type) => sum + (totals.get(type) ?? 0), 0));
+  const rawSafeToSpend = roundMoney(totalIncome - totalFixed - totalSavings - totalLoanRepayments - totalExpenses);
+  return { configuredIncome, actualIncome: roundMoney(actualIncome), totalIncome: roundMoney(totalIncome), totalFixed, totalSavings, totalExpenses, totalLoanRepayments, rawSafeToSpend, safeToSpend: Math.max(0, rawSafeToSpend), periodStart: start.toISOString(), periodEnd: end.toISOString() };
 }
-
-/**
- * Get current Safe-to-Spend without recalculating (read from DB).
- */
-export async function getSafeToSpend(userId: string): Promise<number> {
-  const setup = await prisma.incomeSetup.findUnique({ where: { userId } });
-  return setup?.safeToSpend ?? 0;
-}
+export const calculateSafeToSpend = (userId: string, now = new Date()) => prisma.$transaction(tx => calculateSafeToSpendInTransaction(tx, userId, now), { isolationLevel: 'RepeatableRead' });
+// Calculated on demand: a stored allowance becomes stale after period rollover.
+export async function recalculateSafeToSpend(userId: string) { return (await calculateSafeToSpend(userId)).safeToSpend; }
+export const getSafeToSpend = recalculateSafeToSpend;

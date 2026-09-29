@@ -1,75 +1,29 @@
-import { prisma } from "@/lib/prisma";
-import { recalculateSafeToSpend } from "@/utils/safeToSpend";
+import { money } from '@/utils/money';
+import { getSafeToSpend } from '@/utils/safeToSpend';
+import { occurrenceDate } from '@/utils/recurrence';
+import { FinancialError, type FinancialTx, withFinancialOperation } from './financialOperation';
+import { recordMovement } from './movements';
+export { FinancialError as LoanRepaymentError } from './financialOperation';
 
-export class LoanRepaymentError extends Error {
-  constructor(message: string, public readonly status: number = 400) {
-    super(message);
-  }
+export function calculateRepaymentProgress(input: { deadline: Date; frequency: string; repaymentAmount: number; installmentPaid: number; payment: number; isPaidOff: boolean }) {
+  const total = Math.round((input.installmentPaid + input.payment) * 100);
+  const installment = Math.round(input.repaymentAmount * 100);
+  const count = !input.isPaidOff && input.frequency !== 'ONE_TIME' && installment > 0 ? Math.floor(total / installment) : 0;
+  return { installmentPaid: input.isPaidOff ? 0 : (total - count * installment) / 100, deadline: occurrenceDate(input.deadline, input.frequency, count) };
 }
-
-function nextDueDate(currentDueDate: Date, frequency: string) {
-  const next = new Date(currentDueDate);
-  if (frequency === "WEEKLY") next.setDate(next.getDate() + 7);
-  if (frequency === "MONTHLY") next.setMonth(next.getMonth() + 1);
-  return next;
-}
-
-export async function recordLoanPayment(input: {
-  userId: string;
-  loanId: string;
-  amount: number;
-  paidAt: Date;
-  walletId?: string | null;
-}) {
-  const { userId, loanId, amount, paidAt, walletId } = input;
-  const loan = await prisma.loan.findFirst({ where: { id: loanId, userId } });
-  if (!loan) throw new LoanRepaymentError("Loan not found", 404);
-  if (loan.status === "PAID_OFF") throw new LoanRepaymentError("This loan is already paid off");
-
-  const remaining = Math.max(0, loan.amount - loan.amountPaid);
-  if (amount > remaining) {
-    throw new LoanRepaymentError(`Payment cannot exceed the remaining balance of ${remaining}`);
-  }
-  if (walletId) {
-    const wallet = await prisma.wallet.findFirst({ where: { id: walletId, userId } });
-    if (!wallet) throw new LoanRepaymentError("Selected account was not found");
-  }
-
-  const newAmountPaid = loan.amountPaid + amount;
-  const isPaidOff = newAmountPaid >= loan.amount;
-  const advancedDeadline = nextDueDate(loan.deadline, loan.repaymentFrequency);
-  const nextStatus = isPaidOff
-    ? "PAID_OFF"
-    : advancedDeadline < new Date()
-      ? "OVERDUE"
-      : "ACTIVE";
-
-  const result = await prisma.$transaction(async (tx) => {
-    const transaction = await tx.transaction.create({
-      data: {
-        userId,
-        loanId: loan.id,
-        walletId: walletId || null,
-        description: loan.type === "BORROWED" ? `Loan payment: ${loan.title}` : `Loan collection: ${loan.title}`,
-        type: loan.type === "BORROWED" ? "EXPENSE" : "INCOME",
-        category: loan.type === "BORROWED" ? "Debt Repayment" : "Loan Collection",
-        amount,
-        date: paidAt,
-      },
-    });
-
-    const updatedLoan = await tx.loan.update({
-      where: { id: loan.id },
-      data: {
-        amountPaid: newAmountPaid,
-        status: nextStatus,
-        ...(isPaidOff || loan.repaymentFrequency === "ONE_TIME" ? {} : { deadline: advancedDeadline }),
-      },
-    });
-
-    return { transaction, loan: updatedLoan, remaining: Math.max(0, updatedLoan.amount - updatedLoan.amountPaid) };
+export interface LoanPaymentInput { userId: string; loanId: string; amount: number; paidAt: Date; walletId?: string | null }
+export async function recordLoanPaymentInTransaction(tx: FinancialTx, input: LoanPaymentInput) {
+  const loan = await tx.loan.findFirst({ where: { id: input.loanId, userId: input.userId } });
+  if (!loan) throw new FinancialError('Loan not found', 404);
+  const transaction = await recordMovement(tx, input.userId, {
+    loanId: loan.id, walletId: input.walletId, amount: input.amount, date: input.paidAt,
+    description: `${loan.type === 'BORROWED' ? 'Loan payment' : 'Loan collection'}: ${loan.title}`,
+    type: loan.type === 'BORROWED' ? 'DEBT_PAYMENT' : 'LOAN_COLLECTION', category: loan.type === 'BORROWED' ? 'Debt Repayment' : 'Loan Collection',
   });
-
-  const safeToSpend = await recalculateSafeToSpend(userId);
-  return { ...result, safeToSpend };
+  const updated = await tx.loan.findUniqueOrThrow({ where: { id: loan.id } });
+  return { transaction, loan: { ...updated, amount: money(updated.amount), amountPaid: money(updated.amountPaid), installmentPaid: money(updated.installmentPaid), repaymentAmount: money(updated.repaymentAmount) }, remaining: money(updated.amount) - money(updated.amountPaid) };
+}
+export async function recordLoanPayment(input: LoanPaymentInput, operation?: { key: string; payload: unknown }) {
+  const result = await withFinancialOperation(input.userId, tx => recordLoanPaymentInTransaction(tx, input), operation);
+  return { ...result, safeToSpend: await getSafeToSpend(input.userId) };
 }

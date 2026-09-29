@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { consumeUsage, getSubscriptionSummary } from '@/services/subscription';
 
 /**
  * POST /api/ai/suggest-budget
@@ -35,8 +36,10 @@ export const suggestBudget = async (req: Request, res: Response) => {
 
     // Try to get AI-enhanced suggestions
     const apiKey = process.env.GEMINI_API_KEY || "";
-    if (apiKey && apiKey !== "dummy_gemini_api_key_here") {
+    const subscription = await getSubscriptionSummary(req.user!.userId);
+    if (subscription.plan === 'PLUS' && apiKey && apiKey !== "dummy_gemini_api_key_here") {
       try {
+        await consumeUsage(req.user!.userId, 'aiRequests');
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 

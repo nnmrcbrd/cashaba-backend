@@ -1,6 +1,10 @@
 import { Request, Response } from "express";
+import { createHash } from 'node:crypto';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { prisma } from "@/lib/prisma";
+import { money } from "@/utils/money";
+import { calculateSafeToSpend } from '@/utils/safeToSpend';
+import { getSubscriptionSummary } from '@/services/subscription';
 
 /**
  * GET /api/ai/insights
@@ -11,19 +15,23 @@ export const getFinancialInsights = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id || req.user!.userId;
 
-    // Fetch context data in parallel (read-only)
-    const [transactions, setup, savingsGoals, loans] = await Promise.all([
+    const setup = await calculateSafeToSpend(userId);
+    // Every insight uses the same current income period as Safe-to-Spend, so
+    // totals never mix unrelated weeks or months.
+    const [transactions, savingsGoals, loans] = await Promise.all([
       prisma.transaction.findMany({
-        where: { userId },
+        where: {
+          userId,
+          deletedAt: null,
+          date: { gte: new Date(setup.periodStart), lt: new Date(setup.periodEnd) },
+        },
         orderBy: { date: "desc" },
-        take: 50,
       }),
-      prisma.incomeSetup.findUnique({ where: { userId } }),
       prisma.savingsGoal.findMany({ where: { userId } }),
-      prisma.loan.findMany({ where: { userId, status: "ACTIVE" } }),
+      prisma.loan.findMany({ where: { userId, type: 'BORROWED', status: { in: ['ACTIVE', 'OVERDUE'] } } }),
     ]);
 
-    if (transactions.length === 0 && !setup) {
+    if (transactions.length === 0 && setup.configuredIncome === 0 && savingsGoals.length === 0 && loans.length === 0) {
       return res.json({
         insights: [
           {
@@ -38,16 +46,16 @@ export const getFinancialInsights = async (req: Request, res: Response) => {
     }
 
     // Build context for the AI
-    const expenses = transactions.filter((t) => t.type === "EXPENSE");
-    const totalSpent = expenses.reduce((s, t) => s + t.amount, 0);
-    const totalIncome = setup?.totalIncome || 0;
-    const safeToSpend = setup?.safeToSpend || 0;
+    const expenses = transactions.filter((t) => ["EXPENSE", "BILL_PAYMENT", "DEBT_PAYMENT"].includes(t.type));
+    const totalSpent = expenses.reduce((s, t) => s + money(t.amount), 0);
+    const totalIncome = money(setup?.totalIncome);
+    const safeToSpend = money(setup?.safeToSpend);
 
     // Category breakdown
     const catMap: Record<string, number> = {};
     expenses.forEach((t) => {
       const cat = t.category || "Others";
-      catMap[cat] = (catMap[cat] || 0) + t.amount;
+      catMap[cat] = (catMap[cat] || 0) + money(t.amount);
     });
     const topCategories = Object.entries(catMap)
       .sort((a, b) => b[1] - a[1])
@@ -58,12 +66,12 @@ export const getFinancialInsights = async (req: Request, res: Response) => {
     // Weekend vs weekday spending
     const weekendSpend = expenses
       .filter((t) => [0, 6].includes(new Date(t.date).getDay()))
-      .reduce((s, t) => s + t.amount, 0);
+      .reduce((s, t) => s + money(t.amount), 0);
     const weekdaySpend = totalSpent - weekendSpend;
 
     // Savings progress
-    const totalSaved = savingsGoals.reduce((s, g) => s + g.currentAmount, 0);
-    const totalTarget = savingsGoals.reduce((s, g) => s + g.targetAmount, 0);
+    const totalSaved = savingsGoals.reduce((s, g) => s + money(g.currentAmount), 0);
+    const totalTarget = savingsGoals.reduce((s, g) => s + money(g.targetAmount), 0);
     const savingsPct = totalTarget > 0 ? Math.round((totalSaved / totalTarget) * 100) : 0;
 
     const contextSummary = `
@@ -81,10 +89,17 @@ User Financial Summary:
     const apiKey = process.env.GEMINI_API_KEY || "";
     let insightTexts: string[] = [];
 
-    if (apiKey && apiKey !== "dummy_gemini_api_key_here") {
+    const subscription = await getSubscriptionSummary(userId);
+    if (subscription.plan === 'PLUS' && apiKey && apiKey !== "dummy_gemini_api_key_here") {
       try {
+        const cacheKey = `__DASHBOARD_INSIGHTS__:${new Date().toISOString().slice(0, 10)}:${createHash('sha256').update(contextSummary).digest('hex').slice(0, 16)}`;
+        const cached = await prisma.aiSession.findFirst({ where: { userId, question: cacheKey, state: 'COMPLETED' }, orderBy: { createdAt: 'desc' } });
+        if (cached) {
+          const parsed = JSON.parse(cached.answer);
+          if (Array.isArray(parsed)) insightTexts = parsed.slice(0, 3).map(String);
+        }
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
+        const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-3.6-flash" });
 
         const prompt = `You are CASHA-BA, a personal finance AI assistant for Filipino users.
 Based on this financial summary, generate EXACTLY 3 short, specific, personalized insight messages.
@@ -95,6 +110,7 @@ Example format: ["Insight 1 text.", "Insight 2 text.", "Insight 3 text."]
 Financial data:
 ${contextSummary}`;
 
+        if (insightTexts.length > 0) throw new Error('CACHED_INSIGHTS_READY');
         const result = await model.generateContent(prompt);
         const responseText = result.response.text().trim();
         const jsonMatch = responseText.match(/\[[\s\S]*\]/);
@@ -102,10 +118,11 @@ ${contextSummary}`;
           const parsed = JSON.parse(jsonMatch[0]);
           if (Array.isArray(parsed)) {
             insightTexts = parsed.slice(0, 3).map(String);
+            await prisma.aiSession.create({ data: { userId, question: cacheKey, answer: JSON.stringify(insightTexts), model: process.env.GEMINI_MODEL || 'gemini-3.6-flash', promptTokens: 0, responseTokens: 0, totalTokens: 0, state: 'COMPLETED' } });
           }
         }
       } catch (err) {
-        console.warn("Gemini insights call failed, using heuristic fallback", err);
+        if (!(err instanceof Error && err.message === 'CACHED_INSIGHTS_READY')) console.warn("Gemini insights call failed, using heuristic fallback", err);
       }
     }
 
