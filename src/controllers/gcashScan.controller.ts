@@ -5,6 +5,12 @@ import { parseReceiptModelResponse } from "@/utils/receiptScan";
 import { z } from "zod";
 import { consumeUsage, refundUsage, UsageLimitError } from '@/services/subscription';
 
+type GeminiRequestError = Error & {
+  status?: number;
+  statusText?: string;
+  errorDetails?: Array<{ retryDelay?: string }>;
+};
+
 const imageInputSchema = z.object({
   base64: z.string().min(1).max(7_000_000).regex(/^[A-Za-z0-9+/]*={0,2}$/, "Invalid image data"),
   mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]).default("image/png"),
@@ -34,7 +40,7 @@ export const scanGCashImage = async (req: Request, res: Response) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     // Use vision-capable model
-    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
+    const model = genAI.getGenerativeModel({ model: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || "gemini-3.6-flash" });
 
     const prompt = `This image may be a store receipt, invoice, GCash screenshot, bank transfer confirmation, or other payment record.
 Extract one transaction and output ONLY a JSON object:
@@ -77,7 +83,21 @@ Never invent missing amounts. If the amount cannot be read, return null.`;
       catch (refundError) { console.error('Could not restore failed scan quota:', refundError); }
     }
     if (error instanceof UsageLimitError) return res.status(error.status).json({ message: error.message, code: 'USAGE_LIMIT_REACHED', metric: error.metric, limit: error.limit });
+    const providerError = error as GeminiRequestError;
+    if (providerError.status === 429) {
+      const retryDelay = providerError.errorDetails?.find(detail => detail.retryDelay)?.retryDelay;
+      const retrySeconds = retryDelay ? Math.max(1, Number.parseInt(retryDelay, 10) || 60) : 60;
+      res.setHeader('Retry-After', retrySeconds);
+      return res.status(429).json({
+        message: `Gemini's scan limit is temporarily reached. Try again in about ${retrySeconds} seconds.`,
+        code: 'GEMINI_RATE_LIMITED',
+        retryAfterSeconds: retrySeconds,
+      });
+    }
+    if (providerError.status === 401 || providerError.status === 403) {
+      return res.status(503).json({ message: 'Receipt scanning is temporarily unavailable because Gemini access is not authorized.', code: 'GEMINI_NOT_AUTHORIZED' });
+    }
     console.error("scanGCashImage error:", error);
-    res.status(500).json({ message: "Error processing image" });
+    res.status(502).json({ message: "Gemini could not process the image right now. Try again shortly or enter the transaction manually.", code: 'GEMINI_SCAN_FAILED' });
   }
 };
