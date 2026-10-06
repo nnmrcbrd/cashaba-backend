@@ -1,4 +1,18 @@
 import nodemailer from 'nodemailer';
+import { FinancialError } from './financialOperation';
+
+export function assertOtpMailConfigured() {
+  if (!process.env.SMTP_HOST?.trim() || !process.env.MAIL_FROM?.trim()) throw new FinancialError('Email delivery is currently unavailable. Please try again later.', 503);
+}
+
+export async function sendAccountCode(email: string, code: string, purpose: 'VERIFICATION' | 'PASSWORD_RESET') {
+  assertOtpMailConfigured();
+  await mailTransport().sendMail({
+    from: process.env.MAIL_FROM, to: email,
+    subject: purpose === 'VERIFICATION' ? 'Your Casha-Ba email verification code' : 'Your Casha-Ba password reset code',
+    text: `Your Casha-Ba ${purpose === 'VERIFICATION' ? 'email verification' : 'password reset'} code is: ${code}\n\nThis code expires in 10 minutes and can be used once. Do not share it. If you did not request this, ignore this email.`,
+  });
+}
 
 export function assertMailConfigured() {
   if (process.env.NODE_ENV === 'production' && (!process.env.SMTP_HOST || !process.env.MAIL_FROM)) throw new Error('Account email delivery is not configured');
@@ -14,18 +28,4 @@ export async function verifyMailConnection() {
   assertMailConfigured();
   if (!process.env.SMTP_HOST) throw new Error('SMTP_HOST is required');
   await mailTransport().verify();
-}
-export async function sendAccountLink(email: string, token: string, purpose: 'verify' | 'reset') {
-  assertMailConfigured();
-  const url = new URL(purpose === 'verify' ? '/verify-email' : '/reset-password', process.env.FRONTEND_URL || 'http://localhost:3000');
-  url.searchParams.set('token', token);
-  if (!process.env.SMTP_HOST) {
-    console.info(`Development ${purpose} link: ${url.toString()}`);
-    return;
-  }
-  const transport = mailTransport();
-  await transport.sendMail({ from: process.env.MAIL_FROM, to: email,
-    subject: purpose === 'verify' ? 'Verify your Casha-Ba email' : 'Reset your Casha-Ba password',
-    text: `${purpose === 'verify' ? 'Verify your email' : 'Choose a new password'} using this one-hour link:\n${url}\n\nIf you did not request this, ignore this email.`,
-  });
 }

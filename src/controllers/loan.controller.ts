@@ -1,3 +1,4 @@
+import { isFinancialDate } from "@/utils/calendar";
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { LoanRepaymentError, recordLoanPayment } from "@/services/loanRepayment";
@@ -17,7 +18,7 @@ const createLoanSchema = z.object({
   status: z.enum(["ACTIVE", "PAID_OFF", "OVERDUE"]).default("ACTIVE"),
   type: z.enum(["BORROWED", "LENT"]).default("BORROWED"),
   deadline: z.string().refine(
-    (value) => !Number.isNaN(new Date(value).getTime()),
+    (value) => isFinancialDate(value),
     "A valid deadline is required",
   ),
   repaymentAmount: positiveMoney.optional(),
@@ -33,7 +34,7 @@ const loanStatusSchema = z.object({
 const repaymentSchema = z.object({
   amount: positiveMoney,
   date: z.string().optional().refine(
-    (value) => !value || !Number.isNaN(new Date(value).getTime()),
+    (value) => !value || isFinancialDate(value),
     "A valid payment date is required",
   ),
   walletId: z.string().uuid(),

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
+import { isFinancialDate } from '@/utils/calendar';
 import { prisma } from '@/lib/prisma';
 import { money } from '@/utils/money';
 import { getSafeToSpend } from '@/utils/safeToSpend';
@@ -19,7 +20,7 @@ export const getTransactions = async (req: Request, res: Response) => {
     res.json(rows.map(row => ({ ...row, amount: money(row.amount) })));
   } catch (error) { financialResponse(res, error, 'Error fetching transactions'); }
 };
-const updates = z.object({ description: z.string().trim().min(1).max(200).optional(), category: z.string().trim().min(1).max(50).optional(), amount: positiveMoney.optional(), date: z.coerce.date().optional(), walletId: z.string().uuid().optional() }).refine(data => Object.keys(data).length > 0);
+const updates = z.object({ description: z.string().trim().min(1).max(200).optional(), category: z.string().trim().min(1).max(50).optional(), amount: positiveMoney.optional(), date: z.custom<string | Date>(isFinancialDate).pipe(z.coerce.date()).optional(), walletId: z.string().uuid().optional() }).refine(data => Object.keys(data).length > 0);
 export const updateTransaction = async (req: Request, res: Response) => {
   try {
     const parsed = updates.safeParse(req.body);

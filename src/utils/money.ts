@@ -1,6 +1,7 @@
 import type { Decimal } from "@/generated/prisma/internal/prismaNamespace";
 
 export type MoneyValue = Decimal | number | string | null | undefined | unknown;
+export const WEEKS_PER_MONTH = 52 / 12;
 
 export function money(value: MoneyValue): number {
   if (value === null || value === undefined) return 0;

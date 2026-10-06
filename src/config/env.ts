@@ -25,7 +25,10 @@ export function assertProductionConfig() {
     const required = ['DATABASE_URL', 'JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'FRONTEND_URL', 'BACKEND_URL', 'SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM'] as const;
     const missing = required.filter(name => !process.env[name]?.trim());
     const billingMode = (process.env.BILLING_MODE || '').toLowerCase();
-    if (!['disabled', 'paymongo'].includes(billingMode)) missing.push('BILLING_MODE' as typeof required[number]);
+    if (!['disabled', 'paymongo', 'paymongo_test'].includes(billingMode)) missing.push('BILLING_MODE' as typeof required[number]);
+    if (billingMode === 'paymongo_test' && !process.env.PAYMONGO_SECRET_KEY?.trim().startsWith('sk_test_')) {
+        throw new Error('PayMongo test checkout requires a secret test key. Live payments are blocked.');
+    }
     if (billingMode === 'paymongo') {
         if (!process.env.PAYMONGO_SECRET_KEY?.trim()) missing.push('PAYMONGO_SECRET_KEY' as typeof required[number]);
         if (!process.env.PAYMONGO_WEBHOOK_SECRET?.trim()) missing.push('PAYMONGO_WEBHOOK_SECRET' as typeof required[number]);

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { isCalendarDate } from './calendar';
+import { positiveMoney } from '@/schema/movement';
 
 export const receiptCategories = [
   'Food & Dining',
@@ -20,11 +22,11 @@ export const receiptCategories = [
 ] as const;
 
 const receiptScanSchema = z.object({
-  amount: z.coerce.number().positive().finite(),
+  amount: positiveMoney,
   description: z.string().trim().min(1).max(200),
-  date: z.string().refine((value) => !Number.isNaN(new Date(value).getTime())),
+  date: z.string().refine(isCalendarDate).nullable().default(null),
   category: z.enum(receiptCategories),
-  transactionType: z.enum(['EXPENSE', 'INCOME']),
+  transactionType: z.enum(['EXPENSE', 'INCOME']).nullable().default(null),
 });
 
 export type ReceiptScanResult = z.infer<typeof receiptScanSchema>;

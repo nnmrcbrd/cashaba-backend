@@ -1,9 +1,13 @@
+import { businessDate, businessMidnight } from './calendar';
 export function reportMonths(start: Date, end: Date) {
   const result: Array<{ month: number; year: number; fraction: number }> = [];
-  for (let cursor = new Date(start.getFullYear(), start.getMonth(), 1); cursor <= end; cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)) {
-    const next = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  const first = businessDate(start);
+  for (let cursor = businessMidnight(first.getUTCFullYear(), first.getUTCMonth()); cursor <= end;) {
+    const local = businessDate(cursor);
+    const next = businessMidnight(local.getUTCFullYear(), local.getUTCMonth() + 1);
     const overlap = Math.min(end.getTime() + 1, next.getTime()) - Math.max(start.getTime(), cursor.getTime());
-    result.push({ month: cursor.getMonth() + 1, year: cursor.getFullYear(), fraction: overlap / (next.getTime() - cursor.getTime()) });
+    result.push({ month: local.getUTCMonth() + 1, year: local.getUTCFullYear(), fraction: overlap / (next.getTime() - cursor.getTime()) });
+    cursor = next;
   }
   return result;
 }

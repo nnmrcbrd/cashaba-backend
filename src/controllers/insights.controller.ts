@@ -4,7 +4,9 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { prisma } from "@/lib/prisma";
 import { money } from "@/utils/money";
 import { calculateSafeToSpend } from '@/utils/safeToSpend';
-import { getSubscriptionSummary } from '@/services/subscription';
+import { getSubscriptionSummary, consumeUsage, refundUsage } from '@/services/subscription';
+import { z } from 'zod';
+import { businessDate } from '@/utils/calendar';
 
 /**
  * GET /api/ai/insights
@@ -57,15 +59,10 @@ export const getFinancialInsights = async (req: Request, res: Response) => {
       const cat = t.category || "Others";
       catMap[cat] = (catMap[cat] || 0) + money(t.amount);
     });
-    const topCategories = Object.entries(catMap)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([cat, amt]) => `${cat}: ₱${amt.toLocaleString()}`)
-      .join(", ");
 
     // Weekend vs weekday spending
     const weekendSpend = expenses
-      .filter((t) => [0, 6].includes(new Date(t.date).getDay()))
+      .filter((t) => [0, 6].includes(businessDate(t.date).getUTCDay()))
       .reduce((s, t) => s + money(t.amount), 0);
     const weekdaySpend = totalSpent - weekendSpend;
 
@@ -74,89 +71,55 @@ export const getFinancialInsights = async (req: Request, res: Response) => {
     const totalTarget = savingsGoals.reduce((s, g) => s + money(g.targetAmount), 0);
     const savingsPct = totalTarget > 0 ? Math.round((totalSaved / totalTarget) * 100) : 0;
 
-    const contextSummary = `
-User Financial Summary:
-- Total Income: ₱${totalIncome.toLocaleString()}
-- Safe-to-Spend: ₱${safeToSpend.toLocaleString()}
-- Total Spent (${expenses.length} transactions): ₱${totalSpent.toLocaleString()}
-- Top categories: ${topCategories || "None"}
-- Weekend spending: ₱${weekendSpend.toLocaleString()} vs Weekday: ₱${weekdaySpend.toLocaleString()}
-- Savings: ₱${totalSaved.toLocaleString()} of ₱${totalTarget.toLocaleString()} target (${savingsPct}%)
-- Active loans: ${loans.length}
-`;
-
-    // Try Gemini API
-    const apiKey = process.env.GEMINI_API_KEY || "";
-    let insightTexts: string[] = [];
-
+    // Model selects priorities from verified facts; it cannot invent card text.
+    const topCat = Object.entries(catMap).sort((a, b) => b[1] - a[1])[0];
+    const candidates = [
+      { id: 'spending', text: topCat ? 'Your biggest spending category is ' + topCat[0] + ' at ₱' + topCat[1].toLocaleString() + ' — ' + Math.round(topCat[1] / (totalSpent || 1) * 100) + '% of your total expenses.' : 'Start logging expenses to see category breakdowns.' },
+      { id: 'savings', text: totalTarget > 0 ? "You've saved ₱" + totalSaved.toLocaleString() + ' toward your goals — ' + savingsPct + '% of your total target.' : 'Set a savings goal to start tracking your progress.' },
+      { id: 'safe-to-spend', text: safeToSpend > 0 ? 'Your current Safe-to-Spend is ₱' + safeToSpend.toLocaleString() + '. Stay within this limit to protect your financial obligations.' : setup.rawSafeToSpend < 0 ? 'Your current commitments exceed recorded income by ₱' + Math.abs(setup.rawSafeToSpend).toLocaleString() + '. Safe-to-Spend is zero.' : 'Safe-to-Spend is zero. Record received income and review your bills, savings and debt commitments; expected pay is not received funds.' },
+    ];
+    const selectionSchema = z.array(z.enum(['spending', 'savings', 'safe-to-spend'])).length(3)
+      .refine(ids => new Set(ids).size === 3);
+    let order = candidates.map(item => item.id);
+    const safeFacts = { income: totalIncome, spending: totalSpent, safeToSpend, shortfall: Math.max(0, -setup.rawSafeToSpend), savingsPct, weekendSpend, weekdaySpend, activeLoans: loans.length };
+    const apiKey = process.env.GEMINI_API_KEY;
     const subscription = await getSubscriptionSummary(userId);
-    if (subscription.plan === 'PLUS' && apiKey && apiKey !== "dummy_gemini_api_key_here") {
+    if (subscription.plan === 'PLUS' && apiKey && apiKey !== 'dummy_gemini_api_key_here') {
+      let usageId: string | null = null;
       try {
-        const cacheKey = `__DASHBOARD_INSIGHTS__:${new Date().toISOString().slice(0, 10)}:${createHash('sha256').update(contextSummary).digest('hex').slice(0, 16)}`;
+        const cacheKey = '__DASHBOARD_INSIGHTS__:v2:' + createHash('sha256').update(JSON.stringify(safeFacts)).digest('hex').slice(0, 24);
         const cached = await prisma.aiSession.findFirst({ where: { userId, question: cacheKey, state: 'COMPLETED' }, orderBy: { createdAt: 'desc' } });
-        if (cached) {
-          const parsed = JSON.parse(cached.answer);
-          if (Array.isArray(parsed)) insightTexts = parsed.slice(0, 3).map(String);
+        const prior = cached ? selectionSchema.safeParse(JSON.parse(cached.answer)) : null;
+        if (prior?.success) order = prior.data;
+        else {
+          usageId = (await consumeUsage(userId, 'aiRequests')).id;
+          const modelName = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+          const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: modelName });
+          const result = await model.generateContent('Rank these three budgeting topics by urgency using only the facts. Return ONLY a JSON array containing each ID exactly once: spending, savings, safe-to-spend. Do not provide narrative or recommendations. Prioritize shortfalls. Policy: insight-selection-v2.\n' + JSON.stringify(safeFacts));
+          const match = result.response.text().match(/\[[\s\S]*\]/);
+          const selected = selectionSchema.safeParse(match ? JSON.parse(match[0]) : null);
+          if (!selected.success) throw new Error('INVALID_INSIGHT_SELECTION');
+          order = selected.data;
+          const usage = result.response.usageMetadata;
+          await prisma.aiSession.create({ data: { userId, question: cacheKey, answer: JSON.stringify(order), model: modelName, promptTokens: usage?.promptTokenCount ?? 0, responseTokens: usage?.candidatesTokenCount ?? 0, totalTokens: usage?.totalTokenCount ?? 0, state: 'COMPLETED' } });
         }
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-3.6-flash" });
-
-        const prompt = `You are CASHA-BA, a personal finance AI assistant for Filipino users.
-Based on this financial summary, generate EXACTLY 3 short, specific, personalized insight messages.
-Each insight must be 1-2 sentences max, actionable, and reference actual numbers from the data.
-Output ONLY a JSON array of 3 strings, no markdown, no extra text.
-Example format: ["Insight 1 text.", "Insight 2 text.", "Insight 3 text."]
-
-Financial data:
-${contextSummary}`;
-
-        if (insightTexts.length > 0) throw new Error('CACHED_INSIGHTS_READY');
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text().trim();
-        const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
-          if (Array.isArray(parsed)) {
-            insightTexts = parsed.slice(0, 3).map(String);
-            await prisma.aiSession.create({ data: { userId, question: cacheKey, answer: JSON.stringify(insightTexts), model: process.env.GEMINI_MODEL || 'gemini-3.6-flash', promptTokens: 0, responseTokens: 0, totalTokens: 0, state: 'COMPLETED' } });
-          }
-        }
-      } catch (err) {
-        if (!(err instanceof Error && err.message === 'CACHED_INSIGHTS_READY')) console.warn("Gemini insights call failed, using heuristic fallback", err);
+      } catch {
+        if (usageId) { try { await refundUsage(userId, 'aiRequests', usageId); } catch { console.warn('Failed insight quota refund'); } }
       }
     }
-
-    // Heuristic fallback if AI failed or no key
-    if (insightTexts.length === 0) {
-      const topCat = Object.entries(catMap).sort((a, b) => b[1] - a[1])[0];
-      insightTexts = [
-        topCat
-          ? `Your biggest spending category is ${topCat[0]} at ₱${topCat[1].toLocaleString()} — ${Math.round((topCat[1] / (totalSpent || 1)) * 100)}% of your total expenses.`
-          : "Start logging expenses to see category breakdowns.",
-        savingsPct > 0
-          ? `You've saved ₱${totalSaved.toLocaleString()} toward your goals — ${savingsPct}% of your total target. Keep it up!`
-          : "Set a savings goal to start tracking your progress.",
-        safeToSpend > 0
-          ? `Your current Safe-to-Spend is ₱${safeToSpend.toLocaleString()}. Stay within this limit to protect your financial obligations.`
-          : "Complete your income setup to see your real Safe-to-Spend amount.",
-      ];
-    }
+    const insightTexts = order.map(id => candidates.find(candidate => candidate.id === id)!.text);
 
     // Map insights to rich objects with icons and color types
-    const iconMap = ["📊", "🎯", "💡", "⚠️"];
-    const typeMap: ("info" | "success" | "warning" | "tip")[] = [
-      "info",
-      "success",
-      "tip",
-      "warning",
-    ];
+    const metadata: Record<string, { icon: string; title: string; type: 'info' | 'success' | 'warning' | 'tip' }> = {
+      spending: { icon: '📊', title: 'Spending Pattern', type: 'info' },
+      savings: { icon: '🎯', title: 'Savings Progress', type: 'success' },
+      'safe-to-spend': { icon: setup.rawSafeToSpend < 0 ? '⚠️' : '💡', title: 'Safe-to-Spend', type: setup.rawSafeToSpend < 0 ? 'warning' : 'tip' },
+    };
 
     const insights = insightTexts.map((msg, i) => ({
       id: String(i + 1),
-      icon: iconMap[i] || "💡",
-      title: ["Spending Pattern", "Savings Progress", "Safe-to-Spend", "Heads Up"][i] || "Insight",
+      ...metadata[order[i]],
       message: msg,
-      type: typeMap[i] || "info",
     }));
 
     res.json({ insights });

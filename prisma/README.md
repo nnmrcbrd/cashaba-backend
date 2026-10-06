@@ -53,3 +53,7 @@ exercises the migration with a legacy account, and removes the schema afterward.
 
 The integration suite does not send email or contact Google. Verify SMTP
 delivery and the real Google browser callback separately before deployment.
+
+## October 2 audit fixes
+
+Apply `20261002000000_shared_rate_limits` before deploying this backend to an existing environment. Production rate-limit queries fail closed when the shared store is unavailable. The current fresh baseline includes the same table. No existing financial tables or data are changed by this migration. Integration tests now require TEST_DATABASE_URL unconditionally; ALLOW_ISOLATED_SCHEMA_TESTS no longer enables application-database fallback.

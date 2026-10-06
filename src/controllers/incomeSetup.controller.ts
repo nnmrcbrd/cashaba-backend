@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { calculateSafeToSpend, recalculateSafeToSpend } from "@/utils/safeToSpend";
 import { money } from "@/utils/money";
 import { z } from "zod";
+import { isFinancialDate } from "@/utils/calendar";
 import { FinancialError, financialResponse, requireWallet, requestOperation, withFinancialOperation } from '@/services/financialOperation';
 import { recordMovement, requireNoActiveMovements } from '@/services/movements';
 import { positiveMoney } from '@/schema/movement';
@@ -11,7 +12,7 @@ const incomeSetupSchema = z.object({ totalIncome: positiveMoney, incomePeriod: z
 const fixedExpenseSchema = z.object({
   name: z.string().trim().min(1).max(120),
   amount: positiveMoney,
-  dueDate: z.string().optional().nullable().refine((value) => !value || !Number.isNaN(new Date(value).getTime()), "A valid due date is required"),
+  dueDate: z.string().optional().nullable().refine((value) => !value || isFinancialDate(value), "A valid due date is required"),
   frequency: z.enum(["ONE_TIME", "WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"]).default("MONTHLY"),
   category: z.string().trim().min(1).max(50).default("Bills"),
   reminderDays: z.coerce.number().int().min(0).max(30).default(3),

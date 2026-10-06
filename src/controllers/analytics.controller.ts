@@ -1,3 +1,4 @@
+import { businessDateLabel, FINANCIAL_TIMEZONE } from "@/utils/calendar";
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { money } from "@/utils/money";
@@ -34,7 +35,7 @@ export const getAnalytics = async (req: Request, res: Response) => {
     }, {});
     const categories = Object.entries(categoryMap).map(([name, amount]) => ({ name, amount, percentage: totalExpenses > 0 ? Math.round((amount / totalExpenses) * 100) : 0 })).sort((a, b) => b.amount - a.amount);
     const trendMap = transactions.reduce<Record<string, { income: number; expense: number }>>((points, item) => {
-      const key = item.date.toISOString().slice(0, 10);
+      const key = businessDateLabel(item.date);
       points[key] ||= { income: 0, expense: 0 };
       if (incomeTypes.includes(item.type as typeof incomeTypes[number])) points[key].income += money(item.amount);
       if (expenseTypes.includes(item.type as typeof expenseTypes[number])) points[key].expense += money(item.amount);
@@ -46,7 +47,7 @@ export const getAnalytics = async (req: Request, res: Response) => {
     const budgetConfigured = budgets.length === months.length;
     const periodDays = Math.ceil((range.end.getTime() + 1 - range.start.getTime()) / 86_400_000);
     const configuredIncome = Math.round(money(setup?.totalIncome) * (setup?.incomePeriod === 'weekly' ? periodDays / 7 : months.reduce((sum, period) => sum + period.fraction, 0)) * 100) / 100;
-    const baselineIncome = totalIncome || configuredIncome;
+    const baselineIncome = totalIncome;
     const projectedExpenses = periodForecast(totalExpenses, range.start, range.end);
     const projectedBalance = baselineIncome - projectedExpenses;
     const expenseChangePct = previousExpenses > 0 ? Math.round(((totalExpenses - previousExpenses) / previousExpenses) * 100) : null;
@@ -66,7 +67,7 @@ export const getAnalytics = async (req: Request, res: Response) => {
       topCategory,
     });
     res.json({
-      period: { key: range.period, start: range.start, end: range.end },
+      period: { key: range.period, start: range.start, end: range.end, timezone: FINANCIAL_TIMEZONE },
       summary: { totalIncome, loanCollections, configuredIncome, totalExpenses, netCashFlow: totalIncome - totalExpenses, transactionCount: transactions.length, expenseCount },
       categories,
       topCategory,
@@ -74,11 +75,12 @@ export const getAnalytics = async (req: Request, res: Response) => {
       budget: { configured: budgetConfigured, target: budgetTarget, spent: totalExpenses, remaining: Math.max(0, budgetTarget - totalExpenses), percentage: budgetTarget > 0 ? Math.round((totalExpenses / budgetTarget) * 100) : 0, basis: 'Monthly budgets prorated to the selected days', missingMonths: months.length - budgets.length },
       savings: { saved, target, percentage: target > 0 ? Math.round((saved / target) * 100) : 0, goals: goals.length },
       comparison: { previousExpenses, expenseChangePct },
-      forecast: { projectedExpenses, projectedBalance },
+      forecast: { projectedExpenses, projectedBalance, plannedProjectedBalance: configuredIncome - projectedExpenses, incomeBasis: 'Recorded income only', method: 'Linear extrapolation of recorded spending; not a prediction of scheduled bills', sparseData: Date.now() - range.start.getTime() < 7 * 86_400_000 || expenseCount < 3 },
       review,
       transactions: transactions.map((item) => ({ ...item, amount: money(item.amount) })),
     });
   } catch (error) {
+    if (error instanceof Error && error.message === 'INVALID_REPORTING_PERIOD') return res.status(400).json({ message: 'Choose valid calendar dates in chronological order' });
     console.error("Analytics error:", error);
     res.status(500).json({ message: "Error generating analytics" });
   }

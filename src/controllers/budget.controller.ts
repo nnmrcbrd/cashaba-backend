@@ -1,3 +1,4 @@
+import { businessMonth, businessMidnight } from "@/utils/calendar";
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { money } from "@/utils/money";
@@ -21,12 +22,12 @@ const updateSchema = z.object({
 });
 
 function selectedMonth(req: Request) {
-  const now = new Date();
-  const month = Number(req.query.month ?? req.body?.month ?? now.getMonth() + 1);
-  const year = Number(req.query.year ?? req.body?.year ?? now.getFullYear());
+  const now = businessMonth();
+  const month = Number(req.query.month ?? req.body?.month ?? now.month);
+  const year = Number(req.query.year ?? req.body?.year ?? now.year);
   return {
-    month: Number.isInteger(month) && month >= 1 && month <= 12 ? month : now.getMonth() + 1,
-    year: Number.isInteger(year) && year >= 2000 && year <= 2200 ? year : now.getFullYear(),
+    month: Number.isInteger(month) && month >= 1 && month <= 12 ? month : now.month,
+    year: Number.isInteger(year) && year >= 2000 && year <= 2200 ? year : now.year,
   };
 }
 
@@ -35,8 +36,8 @@ export const getBudgets = async (req: Request, res: Response) => {
     const { month, year } = selectedMonth(req);
     const userId = req.user!.userId;
     const budget = await prisma.budget.findUnique({ where: { userId_month_year: { userId, month, year } }, include: { categories: true } });
-    const start = new Date(year, month - 1, 1);
-    const end = new Date(year, month, 1);
+    const start = businessMidnight(year, month - 1);
+    const end = businessMidnight(year, month);
     const expenses = await prisma.transaction.findMany({
       where: { userId, deletedAt: null, type: { in: ["EXPENSE", "BILL_PAYMENT", "DEBT_PAYMENT"] }, date: { gte: start, lt: end } },
       select: { amount: true, category: true },
@@ -73,9 +74,9 @@ export const updateBudget = async (req: Request, res: Response) => {
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: "Valid budget details required", errors: parsed.error.flatten().fieldErrors });
   try {
-    const now = new Date();
-    const month = parsed.data.month ?? now.getMonth() + 1;
-    const year = parsed.data.year ?? now.getFullYear();
+    const now = businessMonth();
+    const month = parsed.data.month ?? now.month;
+    const year = parsed.data.year ?? now.year;
     const userId = req.user!.userId;
     const updated = await prisma.budget.upsert({
       where: { userId_month_year: { userId, month, year } },
@@ -94,9 +95,9 @@ export const updateBudget = async (req: Request, res: Response) => {
 export const copyPreviousBudget = async (req: Request, res: Response) => {
   try {
     const { month, year } = selectedMonth(req);
-    const current = new Date(year, month - 2, 1);
+    const current = new Date(Date.UTC(year, month - 2, 1));
     const userId = req.user!.userId;
-    const previous = await prisma.budget.findUnique({ where: { userId_month_year: { userId, month: current.getMonth() + 1, year: current.getFullYear() } }, include: { categories: true } });
+    const previous = await prisma.budget.findUnique({ where: { userId_month_year: { userId, month: current.getUTCMonth() + 1, year: current.getUTCFullYear() } }, include: { categories: true } });
     if (!previous) return res.status(404).json({ message: "No previous-month budget was found" });
     const copied = await prisma.budget.upsert({
       where: { userId_month_year: { userId, month, year } },

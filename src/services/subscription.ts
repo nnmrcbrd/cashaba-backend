@@ -39,12 +39,14 @@ export async function getSubscriptionSummary(userId: string, now = new Date()) {
     currentPeriodStart: subscription?.currentPeriodStart ?? periodStart,
     currentPeriodEnd: subscription?.currentPeriodEnd ?? periodEnd,
     cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd ?? false,
-    paymentPending: subscription?.provider === 'PAYMONGO' && subscription.plan === 'FREE' && subscription.status === 'ACTIVE' && Boolean(subscription.providerSubscriptionId),
+    paymentPending: ['PAYMONGO', 'PAYMONGO_TEST'].includes(subscription?.provider ?? '') && subscription?.plan === 'FREE' && subscription.status === 'ACTIVE' && Boolean(subscription.providerSubscriptionId),
     providerActionRequired: subscription?.provider === 'PAYMONGO' && Boolean(subscription.providerSubscriptionId) && !['CANCELLED', 'EXPIRED'].includes(subscription.status) && plan === 'FREE',
     used,
     limits,
     remaining: { aiRequests: Math.max(0, limits.aiRequests - used.aiRequests), receiptScans: Math.max(0, limits.receiptScans - used.receiptScans) },
     demoAvailable: process.env.NODE_ENV !== 'production' && (process.env.BILLING_MODE ?? 'demo') === 'demo',
+    billingMode: process.env.BILLING_MODE ?? 'demo',
+    testCheckoutAvailable: process.env.BILLING_MODE === 'paymongo_test' && Boolean(process.env.PAYMONGO_SECRET_KEY?.trim().startsWith('sk_test_')),
   };
 }
 

@@ -5,19 +5,30 @@ import {
   loginSchema,
   resetPasswordSchema,
   signupSchema,
+  emailOtpSchema,
 } from '../schema/auth';
 import {
   loginUser,
   changeUserPassword,
   refreshUserSession,
   registerUser,
-  requestPasswordReset,
   resetUserPassword,
   revokeUserSession,
   verifyUserEmail,
+  verifyUserEmailCode,
+  verifyPasswordResetCode,
   loginWithGoogle,
 } from '../services/auth';
 import { randomBytes, timingSafeEqual } from 'crypto';
+import { EmailOtpRateLimitError, requestEmailOtp } from '../services/emailOtp';
+import { FinancialError } from '../services/financialOperation';
+
+function sendOtpRateLimit(res: Response, error: unknown) {
+  if (!(error instanceof EmailOtpRateLimitError)) return false;
+  res.setHeader('Retry-After', error.retryAfterSeconds);
+  res.status(429).json({ message: error.message, retryAfterSeconds: error.retryAfterSeconds });
+  return true;
+}
 
 const refreshCookieOptions = {
   httpOnly: true,
@@ -137,9 +148,14 @@ export const signup = async (req: Request, res: Response): Promise<void> => {
   try {
     const validatedData = signupSchema.parse(req.body);
     const user = await registerUser(validatedData);
+    // A previous browser session must not masquerade as the new account.
+    await revokeUserSession(req.cookies?.refreshToken);
+    res.clearCookie('refreshToken', refreshCookieOptions);
 
     res.status(201).json({
-      message: 'Check your email to verify your account before signing in.',
+      message: 'Enter the six-digit code from your email before signing in.',
+      requiresEmailVerification: true,
+      ...user.verification,
       user: {
         id: user.id,
         email: user.email,
@@ -147,11 +163,40 @@ export const signup = async (req: Request, res: Response): Promise<void> => {
       }
     });
   } catch (error: any) {
+    if (sendOtpRateLimit(res, error)) return;
     if (error.name === 'ZodError') {
-      res.status(400).json({ errors: error.errors });
+      res.status(400).json({ errors: error.issues });
     } else {
-      res.status(400).json({ message: error.message });
+      res.status(error instanceof FinancialError ? error.status : 400).json({ message: error.message });
     }
+  }
+};
+
+export const verifyEmailCode = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { challengeId, code } = emailOtpSchema.parse(req.body);
+    res.json(await verifyUserEmailCode(challengeId, code));
+  } catch (error: any) {
+    res.status(error instanceof FinancialError ? error.status : 400).json({ message: error.name === 'ZodError' ? error.issues?.[0]?.message : error.message || 'Unable to verify the code.' });
+  }
+};
+
+export const resendVerification = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email } = forgotPasswordSchema.parse(req.body);
+    res.json({ message: 'If this account needs verification, check your email for a code.', ...await requestEmailOtp(email, 'VERIFICATION') });
+  } catch (error: any) {
+    if (sendOtpRateLimit(res, error)) return;
+    res.status(error instanceof FinancialError ? error.status : 400).json({ message: error.name === 'ZodError' ? 'A valid email is required.' : error.message || 'Unable to request a code.' });
+  }
+};
+
+export const verifyResetCode = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { challengeId, code } = emailOtpSchema.parse(req.body);
+    res.json(await verifyPasswordResetCode(challengeId, code));
+  } catch (error: any) {
+    res.status(error instanceof FinancialError ? error.status : 400).json({ message: error.name === 'ZodError' ? error.issues?.[0]?.message : error.message || 'Unable to verify the code.' });
   }
 };
 
@@ -187,7 +232,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     });
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      res.status(400).json({ errors: error.errors });
+      res.status(400).json({ errors: error.issues });
     } else if (
       error.message === 'Invalid email or password' ||
       error.message === 'Please verify your email address before logging in.' ||
@@ -230,20 +275,14 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
 export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email } = forgotPasswordSchema.parse(req.body);
-    const token = await requestPasswordReset(email);
-    const developmentResetUrl = process.env.NODE_ENV !== 'production' && token
-      ? new URL(`/reset-password?token=${encodeURIComponent(token)}`, process.env.FRONTEND_URL || 'http://localhost:3000').toString()
-      : undefined;
     res.status(200).json({
-      message: 'If an account exists, password reset instructions have been generated.',
-      developmentHint: process.env.NODE_ENV !== 'production' && token
-        ? 'Email delivery is not configured, so use the local development reset link.'
-        : undefined,
-      developmentResetUrl,
+      message: 'If an eligible account exists, check your email for a password reset code.',
+      ...await requestEmailOtp(email, 'PASSWORD_RESET'),
     });
   } catch (error: any) {
+    if (sendOtpRateLimit(res, error)) return;
     if (error.name === 'ZodError') res.status(400).json({ message: 'A valid email is required' });
-    else res.status(500).json({ message: 'Unable to start password reset' });
+    else res.status(error instanceof FinancialError ? error.status : 500).json({ message: error instanceof FinancialError ? error.message : 'Unable to start password reset' });
   }
 };
 

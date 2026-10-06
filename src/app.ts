@@ -4,7 +4,11 @@ import cookieParser from 'cookie-parser';
 import { prisma } from './lib/prisma.js';
 
 const app: Application = express();
-if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
+if (process.env.NODE_ENV === 'production') {
+  const hops = Number(process.env.TRUST_PROXY_HOPS || '1');
+  if (!Number.isInteger(hops) || hops < 0 || hops > 10) throw new Error('TRUST_PROXY_HOPS must be an integer from 0 to 10');
+  app.set('trust proxy', hops);
+}
 
 // Middlewares
 app.use(cors({

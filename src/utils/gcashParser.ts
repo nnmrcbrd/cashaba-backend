@@ -1,6 +1,7 @@
 import { Readable } from 'stream';
 import csv from 'csv-parser';
 import { FinancialError } from '@/services/financialOperation';
+import { isCalendarDate } from './calendar';
 export interface GCashRow { amount: number; description: string; date: string }
 // Supported contract: Date (YYYY-MM-DD), Description, signed Amount; or Debit/Credit.
 // Bank labels do not imply support for proprietary export formats.
@@ -35,7 +36,7 @@ export const parseGCashCSV = parseBankCSV;
  * Parses OCR-extracted text from a GCash screenshot to extract amount, description, and date.
  * Called after Gemini Vision API extracts the text content from the image.
  */
-export function parseGCashImageText(ocrText: string): GCashRow | null {
+export function parseGCashImageText(ocrText: string): { amount: number; description: string; date: string | null; transactionType: 'INCOME' | 'EXPENSE' | null } | null {
     try {
         // Extract amount — match "₱1,234.56" or "PHP 1,234.56" or plain "1234.56"
         const amountMatch = ocrText.match(/(?:₱|PHP\s*)([\d,]+(?:\.\d{1,2})?)/i);
@@ -55,11 +56,21 @@ export function parseGCashImageText(ocrText: string): GCashRow | null {
         const dateMatch = ocrText.match(
             /(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\w+ \d{1,2},?\s*\d{4}|\d{4}-\d{2}-\d{2})/i
         );
-        const parsedDate = dateMatch ? new Date(dateMatch[1]) : new Date();
-        if (Number.isNaN(parsedDate.getTime())) return null;
-        const date = parsedDate.toISOString().split("T")[0];
-
-        return { amount, description, date };
+        // Prefer the explicit date-only contract. Ambiguous numeric dates and
+        // missing dates remain unknown, for the user to select during review.
+        const exactDate = ocrText.match(/\b\d{4}-\d{2}-\d{2}\b/)?.[0];
+        let date: string | null = exactDate && isCalendarDate(exactDate) ? exactDate : null;
+        if (!exactDate && dateMatch && /^[A-Za-z]+\s/.test(dateMatch[1])) {
+            const named = dateMatch[1].match(/^([A-Za-z]+) (\d{1,2}),?\s*(\d{4})$/);
+            const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+            const month = named ? months.findIndex(value => value === named[1].toLowerCase() || value.slice(0, 3) === named[1].toLowerCase()) : -1;
+            const candidate = named && month >= 0 ? `${named[3]}-${String(month + 1).padStart(2, '0')}-${named[2].padStart(2, '0')}` : null;
+            if (candidate && isCalendarDate(candidate)) date = candidate;
+        }
+        const incoming = /\breceived from\b|\bmoney received\b|\bsalary credited\b/i.test(ocrText);
+        const outgoing = /\bsent to\b|\bpaid to\b|\bpayment sent\b/i.test(ocrText);
+        const transactionType = incoming === outgoing ? null : incoming ? 'INCOME' as const : 'EXPENSE' as const;
+        return { amount, description, date, transactionType };
     } catch {
         return null;
     }

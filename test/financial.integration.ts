@@ -1,15 +1,15 @@
 import 'dotenv/config';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Client } from 'pg';
 import bcrypt from 'bcryptjs';
 
 // Require an explicit test database. Every object and test user additionally
 // lives in a random isolated schema. No application schema is queried.
-const connectionString = process.env.TEST_DATABASE_URL || (process.env.ALLOW_ISOLATED_SCHEMA_TESTS === 'true' ? process.env.DATABASE_URL : undefined);
-test('PostgreSQL API and financial integration regressions', { skip: !connectionString, timeout: 240_000 }, async t => {
+const connectionString = process.env.TEST_DATABASE_URL;
+test('PostgreSQL API and financial integration regressions', { skip: !connectionString, timeout: 360_000 }, async t => {
   const schema = 'casha_test_' + randomUUID().replaceAll('-', '');
   assert.match(schema, /^casha_test_[a-f0-9]{32}$/);
   const admin = new Client({ connectionString });
@@ -35,6 +35,8 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
   assert.ok((await admin.query("SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name='Wallet' AND column_name='custom_type'", [schema])).rows.length);
   await admin.query(await readFile(new URL('../prisma/migrations/20260928180000_add_paymongo_plan_id/migration.sql', import.meta.url), 'utf8'));
   assert.ok((await admin.query("SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name='Subscription' AND column_name='provider_plan_id'", [schema])).rows.length);
+  await admin.query('DROP TABLE "RateLimitBucket"');
+  await admin.query(await readFile(new URL('../prisma/migrations/20261002000000_shared_rate_limits/migration.sql', import.meta.url), 'utf8'));
 
   process.env.TEST_DATABASE_URL = connectionString!;
   process.env.TEST_DATABASE_SCHEMA = schema;
@@ -74,9 +76,504 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
       budget?: { target: number }; configured?: boolean; customType?: string; targetAmount?: number; safeToSpend?: number;
       setup?: { totalIncome: number }; plan?: string; cancelAtPeriodEnd?: boolean; paymentPending?: boolean; limits?: { aiRequests: number; receiptScans: number };
       summary?: { totalIncome: number; loanCollections: number; netCashFlow: number };
+      requiresClarification?: boolean; requiresConfirmation?: boolean; content?: string; walletOptions?: string[];
     };
     return { status: response.status, body: result };
   }
+
+  await t.test('shared rate-limit migration counts concurrent requests atomically and expires counters', async () => {
+    const { databaseRateLimit } = await import('../src/middlewares/rateLimit.middleware');
+    const key = randomUUID();
+    const counts = await Promise.all(Array.from({ length: 12 }, () => databaseRateLimit(key, 60_000)));
+    assert.deepEqual(counts.map(item => item.count).sort((a, b) => a - b), Array.from({ length: 12 }, (_, index) => index + 1));
+    for (const entry of counts) assert.ok(entry.resetAt > Date.now() && entry.resetAt <= Date.now() + 60_000, 'Retry deadlines must not gain a timezone offset');
+    assert.equal((await prisma.rateLimitBucket.findUniqueOrThrow({ where: { key } })).hits, 12);
+    await prisma.rateLimitBucket.update({ where: { key }, data: { expiresAt: new Date(0) } });
+    assert.equal((await databaseRateLimit(key, 60_000)).count, 1);
+    assert.equal((await databaseRateLimit(randomUUID(), 60_000)).count, 1);
+    const oldStore = process.env.RATE_LIMIT_STORE;
+    process.env.RATE_LIMIT_STORE = 'postgres';
+    try {
+      const response = await fetch(base + '/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      assert.equal(response.status, 401);
+      assert.equal(response.headers.get('RateLimit-Limit'), '60');
+    } finally { if (oldStore === undefined) delete process.env.RATE_LIMIT_STORE; else process.env.RATE_LIMIT_STORE = oldStore; }
+  });
+  await t.test('cross-origin session requests cannot consume an existing refresh cookie', async () => {
+    const f = await fixture();
+    const signed = await auth.loginUser({ email: f.user.email, password });
+    const cookie = 'refreshToken=' + signed.refreshToken;
+    const response = await fetch(base + '/auth/refresh', { method: 'POST', headers: { Cookie: cookie, Origin: 'https://untrusted.example.test', 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(response.status, 403);
+    assert.equal((await fetch(base + '/auth/logout', { method: 'POST', headers: { Cookie: cookie, Origin: 'https://untrusted.example.test' } })).status, 403);
+    const permitted = await fetch(base + '/auth/refresh', { method: 'POST', headers: { Cookie: cookie, Origin: new URL(process.env.FRONTEND_URL || 'http://localhost:3000').origin, 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(permitted.status, 200);
+  });
+  await t.test('HTTP validation rejects bad budgets and dates with useful auth error details', async () => {
+    const f = await fixture();
+    for (const income of ['Infinity', 'not-a-number', -100, true]) assert.equal((await api(f.token, '/ai/suggest-budget', 'POST', { income, period: 'monthly' })).status, 400);
+    assert.equal((await api(f.token, '/ai/suggest-budget', 'POST', { income: 7, period: 'monthly' })).status, 200);
+    assert.equal((await api(f.token, '/transactions', 'POST', { walletId: f.wallet.id, type: 'EXPENSE', amount: 100, category: 'Others', description: 'Test', date: '2026-02-30' })).status, 400);
+    const invalidLogin = await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'bad', password: '' }) });
+    assert.equal(invalidLogin.status, 400);
+    assert.ok(Array.isArray((await invalidLogin.json() as { errors?: unknown }).errors));
+  });
+  await t.test('malformed model budgets and insights cannot publish invented money', async () => {
+    const f = await fixture();
+    const now = new Date();
+    await prisma.subscription.create({ data: { userId: f.user.id, plan: 'PLUS', status: 'ACTIVE', currentPeriodStart: now, currentPeriodEnd: new Date(now.getTime() + 86_400_000) } });
+    await prisma.incomeSetup.create({ data: { userId: f.user.id, totalIncome: 1000, incomePeriod: 'monthly' } });
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const oldModel = GoogleGenerativeAI.prototype.getGenerativeModel, oldKey = process.env.GEMINI_API_KEY;
+    let output = '{"weeklyAllowance":999999999,"summary":"Guaranteed profits"}';
+    process.env.GEMINI_API_KEY = 'synthetic-audit-key';
+    GoogleGenerativeAI.prototype.getGenerativeModel = (() => ({ generateContent: async () => ({ response: { text: () => output } }) })) as unknown as typeof oldModel;
+    try {
+      const response = await fetch(base + '/ai/suggest-budget', { method: 'POST', headers: { Authorization: 'Bearer ' + f.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ income: 1000, period: 'monthly' }) });
+      assert.equal(response.status, 200);
+      const plan = await response.json() as { weeklyAllowance: number; summary: string };
+      assert.ok(plan.weeklyAllowance < 1000);
+      assert.ok(!plan.summary.includes('Guaranteed'));
+      output = '["You have ₱999999999 available",{"wrong":"shape"}]';
+      const insights = await fetch(base + '/ai/insights', { headers: { Authorization: 'Bearer ' + f.token } });
+      assert.equal(insights.status, 200);
+      const cards = await insights.json() as { insights: Array<{ message: string }> };
+      assert.equal(cards.insights.length, 3);
+      assert.ok(cards.insights.every(item => !item.message.includes('999999999')));
+      const usage = await prisma.usagePeriod.findFirstOrThrow({ where: { userId: f.user.id } });
+      assert.equal(usage.aiRequests, 0);
+    } finally {
+      GoogleGenerativeAI.prototype.getGenerativeModel = oldModel;
+      if (oldKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = oldKey;
+    }
+  });
+
+  await t.test('AI provider payload aliases account names and excludes stored descriptions without breaking previews', async () => {
+    const f = await fixture();
+    await prisma.wallet.update({ where: { id: f.wallet.id }, data: { name: 'Personal Cash' } });
+    await withFinancialOperation(f.user.id, tx => recordMovement(tx, f.user.id, { walletId: f.wallet.id, amount: 100, type: 'INCOME', category: 'Salary', description: 'private medical detail', date: new Date() }));
+    await prisma.aiSession.create({ data: { userId: f.user.id, question: 'Can I use Personal Cash for meals?', answer: 'Review your food budget before deciding.', model: 'test', promptTokens: 0, responseTokens: 0, totalTokens: 0, state: 'COMPLETED' } });
+    const originalFetch = globalThis.fetch, oldKey = process.env.GEMINI_API_KEY;
+    let captured = '';
+    process.env.GEMINI_API_KEY = 'synthetic-audit-key';
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.startsWith(base)) return originalFetch(input, init);
+      assert.ok(url.includes('generativelanguage.googleapis.com'), 'Unexpected external request blocked');
+      const body = JSON.parse(String(init?.body)) as { systemInstruction?: { parts?: Array<{ text?: string }> }; system_instruction?: { parts?: Array<{ text?: string }> } };
+      captured = JSON.stringify(body);
+      const prompt = (body.systemInstruction?.parts ?? body.system_instruction?.parts ?? []).map(part => part.text).join('\n');
+      const walletAlias = prompt.match(/"wallets":\[\{"name":"(CASHA_ENTITY_\d+)"/)?.[1];
+      assert.ok(walletAlias);
+      return Response.json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify({ intent: 'LOG_TRANSACTION', amount: 50, description: 'Lunch', category: 'Food & Dining', transactionType: 'EXPENSE', walletName: walletAlias, date: 'today' }) }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10, totalTokenCount: 30 } });
+    };
+    try {
+      const response = await api(f.token, '/ai/chat', 'POST', { message: 'I spent 50 on lunch using Personal Cash today' });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.requiresConfirmation, true);
+      assert.ok(response.body.content?.includes('Personal Cash'));
+      assert.ok(captured && !captured.includes('Personal Cash'));
+      assert.ok(!captured.includes('private medical detail'));
+      assert.ok(captured.includes('recentConversation'));
+      assert.ok(captured.includes('Review your food budget before deciding.'));
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = oldKey;
+    }
+  });
+
+  await t.test('personal advice reads only the signed-in user, answers goal timelines and never writes money', async () => {
+    const a = await fixture(), b = await fixture();
+    await prisma.incomeSetup.create({ data: { userId: a.user.id, totalIncome: 2000, incomePeriod: 'weekly' } });
+    await prisma.savingsGoal.create({ data: { userId: a.user.id, name: 'Phone', targetAmount: 12000, currentAmount: 1000, monthlyAllocation: 2000 } });
+    await prisma.savingsGoal.create({ data: { userId: b.user.id, name: 'Phone', targetAmount: 90000, currentAmount: 10000, monthlyAllocation: 8000 } });
+    const timeline = await api(a.token, '/ai/chat', 'POST', { message: 'how many months will it take for me to buy the latest phone?' });
+    assert.equal(timeline.status, 200);
+    assert.match(timeline.body.content!, /6 months/);
+    assert.match(timeline.body.content!, /12,000\.00/);
+    assert.doesNotMatch(timeline.body.content!, /90,000\.00|10,000\.00/);
+    assert.notEqual(timeline.body.requiresConfirmation, true);
+    const unknown = await api(b.token, '/ai/chat', 'POST', { message: 'How long will it take to buy a laptop?' });
+    assert.match(unknown.body.content!, /need the phone\/item price/);
+    const income = await api(a.token, '/ai/chat', 'POST', { message: 'How much is my income?' });
+    assert.equal(income.status, 200);
+    assert.match(income.body.content!, /planned income is ₱2,000\.00 per week/);
+    assert.match(income.body.content!, /recorded ₱0\.00/);
+    const before = await api(a.token, '/ai/chat', 'POST', { message: 'Why is my Safe-to-Spend zero?' });
+    assert.match(before.body.content!, /received income ₱0\.00/);
+    await withFinancialOperation(a.user.id, tx => recordMovement(tx, a.user.id, { walletId: a.wallet.id, amount: 500, type: 'INCOME', category: 'Allowance', description: 'Received allowance', date: new Date() }));
+    const after = await api(a.token, '/ai/chat', 'POST', { message: 'How much is my income?' });
+    assert.match(after.body.content!, /recorded ₱500\.00/);
+    assert.equal(await prisma.transaction.count({ where: { userId: a.user.id } }), 1);
+    assert.equal(await prisma.transaction.count({ where: { userId: b.user.id } }), 0);
+  });
+
+  await t.test('savings conversation persists price and allocation, isolates users and retains financial confirmation', async () => {
+    // Exercise the authenticated chat controller separately from the shared IP
+    // limiter, so a multi-turn regression does not exhaust unrelated API tests.
+    const express = (await import('express')).default;
+    const { authenticate } = await import('../src/middlewares/auth.middleware');
+    const { processAiChat, getAiHistory } = await import('../src/controllers/aiCommand.controller');
+    const conversationApp = express();
+    conversationApp.use(express.json());
+    conversationApp.post('/chat', authenticate, processAiChat);
+    conversationApp.get('/history', authenticate, getAiHistory);
+    const conversationServer = conversationApp.listen(0, '127.0.0.1');
+    await new Promise<void>(resolve => conversationServer.once('listening', resolve));
+    const chatAddress = conversationServer.address();
+    assert.ok(chatAddress && typeof chatAddress !== 'string');
+    const chatBase = `http://127.0.0.1:${chatAddress.port}`;
+    type Reply = { id?: string; content?: string; requiresClarification?: boolean; requiresConfirmation?: boolean };
+    async function chat(token: string, message: string, ids: { clarificationId?: string; confirmationId?: string } = {}) {
+      const response = await fetch(chatBase + '/chat', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ message, ...ids }) });
+      return { status: response.status, body: await response.json() as Reply };
+    }
+    try {
+      const a = await fixture(), b = await fixture();
+      await prisma.subscription.create({ data: { userId: a.user.id, plan: 'PLUS', status: 'ACTIVE', currentPeriodStart: new Date(), currentPeriodEnd: new Date(Date.now() + 86_400_000) } });
+      await prisma.incomeSetup.create({ data: { userId: a.user.id, totalIncome: 10000, incomePeriod: 'monthly' } });
+      await prisma.savingsGoal.create({ data: { userId: b.user.id, name: 'Private iPhone', targetAmount: 90000, currentAmount: 60000, monthlyAllocation: 10000 } });
+      await withFinancialOperation(a.user.id, async tx => {
+        await recordMovement(tx, a.user.id, { walletId: a.wallet.id, amount: 2500, type: 'INCOME', category: 'Allowance', description: 'Fixture income', date: new Date() });
+        await recordMovement(tx, a.user.id, { walletId: a.wallet.id, amount: 2648, type: 'EXPENSE', category: 'Bills', description: 'Fixture expense', date: new Date() });
+      });
+      const question = await chat(a.token, 'how long will it take for me to buy latest iphone?');
+      assert.equal(question.status, 200);
+      assert.equal(question.body.requiresClarification, true);
+      assert.match(question.body.content!, /price in pesos/);
+      assert.doesNotMatch(question.body.content!, /Private iPhone|90,000\.00/);
+      assert.equal((await chat(b.token, '194,990', { clarificationId: question.body.id })).status, 409);
+      const price = await chat(a.token, '194,990', { clarificationId: question.body.id });
+      assert.equal(price.status, 200);
+      assert.match(price.body.content!, /194,990\.00/);
+      assert.match(price.body.content!, /How much can you set aside/);
+      const restored = await fetch(chatBase + '/history', { headers: { Authorization: 'Bearer ' + a.token } });
+      const history = await restored.json() as Array<{ id: string; state: string; pendingAction: { kind?: string; price?: number } }>;
+      assert.equal(history.at(-1)?.pendingAction.price, 194990);
+      assert.equal(history.filter(turn => turn.state === 'NEEDS_CLARIFICATION').length, 1);
+      const explanation = await chat(a.token, 'what do u mean by transaction?', { clarificationId: history.at(-1)!.id });
+      assert.match(explanation.body.content!, /^A transaction is a financial entry/);
+      const plan = await chat(a.token, '2000 per month', { clarificationId: explanation.body.id });
+      assert.equal(plan.status, 200);
+      assert.match(plan.body.content!, /98 months/);
+      assert.match(plan.body.content!, /Safe-to-Spend is ₱0\.00/);
+      assert.notEqual(plan.body.requiresConfirmation, true);
+      assert.equal(await prisma.transaction.count({ where: { userId: a.user.id } }), 2);
+      assert.equal(await prisma.savingsGoal.count({ where: { userId: a.user.id } }), 0);
+      const simple = await chat(a.token, 'what? i dont get it');
+      assert.equal(simple.status, 200);
+      assert.match(simple.body.content!, /^In simpler terms:/);
+      assert.match(simple.body.content!, /98 months/);
+      const thousand = await chat(a.token, '1000 per month');
+      assert.match(thousand.body.content!, /195 months \(16 years and 3 months\)/);
+      const simplified = await chat(a.token, 'can you explain that?');
+      assert.match(simplified.body.content!, /195 months/);
+      assert.doesNotMatch(simplified.body.content!, /I can help you plan/);
+      const next = await chat(a.token, 'what should i do next?');
+      assert.match(next.body.content!, /Budget & Goals/);
+      await withFinancialOperation(a.user.id, tx => recordMovement(tx, a.user.id, { walletId: a.wallet.id, amount: 500, type: 'INCOME', category: 'Allowance', description: 'Additional fixture income', date: new Date() }));
+      const updated = await chat(a.token, 'what if I can save 5000 per month?');
+      assert.equal(updated.status, 200);
+      assert.match(updated.body.content!, /39 months/);
+      const freshIncome = await chat(a.token, 'How much income have I received?');
+      assert.match(freshIncome.body.content!, /recorded ₱3,000\.00/);
+      // Resume a fresh saved planning context after deliberately changing topics.
+      const resumed = await chat(a.token, 'How long to buy a phone worth PHP 194990 at 5000 per month?');
+      assert.match(resumed.body.content!, /39 months/);
+      const why = await chat(a.token, 'why is it so long?');
+      assert.match(why.body.content!, /39 months/);
+      assert.equal(await prisma.transaction.count({ where: { userId: a.user.id } }), 3);
+      await prisma.savingsGoal.create({ data: { userId: a.user.id, name: 'Phone', targetAmount: 5000, currentAmount: 0, monthlyAllocation: 1000 } });
+      const action = await chat(a.token, 'Save 500 to Phone from Cash today');
+      assert.equal(action.status, 200);
+      assert.equal(action.body.requiresConfirmation, true);
+      const clarifyAction = await chat(a.token, 'What is a transaction?');
+      assert.match(clarifyAction.body.content!, /^A transaction is/);
+      assert.equal(clarifyAction.body.id, action.body.id);
+      assert.equal(clarifyAction.body.requiresConfirmation, true);
+      assert.equal((await prisma.aiSession.findUniqueOrThrow({ where: { id: action.body.id } })).state, 'AWAITING_CONFIRMATION');
+      assert.equal(await prisma.transaction.count({ where: { userId: a.user.id } }), 3);
+      assert.equal((await chat(a.token, 'confirm', { confirmationId: action.body.id })).status, 200);
+      assert.equal(await prisma.transaction.count({ where: { userId: a.user.id } }), 4);
+      assert.equal(Number((await prisma.savingsGoal.findFirstOrThrow({ where: { userId: a.user.id } })).currentAmount), 500);
+      const budget = await chat(a.token, 'How do I set a monthly budget?');
+      assert.match(budget.body.content!, /Planning → Budget & Goals/);
+      const budgetSimple = await chat(a.token, 'I don’t understand');
+      assert.match(budgetSimple.body.content!, /limit you choose for monthly spending/);
+      const reset = await chat(a.token, 'start over');
+      assert.equal(reset.status, 200);
+      const unrelatedAmount = await chat(a.token, '194990');
+      assert.match(unrelatedAmount.body.content!, /What does/);
+      assert.doesNotMatch(unrelatedAmount.body.content!, /195 months|39 months/);
+
+      // Read-only questions must not replace or execute a pending money entry.
+      const draft = await chat(a.token, 'I spent 100 on lunch today');
+      assert.equal(draft.body.requiresClarification, true);
+      const explainDraft = await chat(a.token, 'what? i dont get it', { clarificationId: draft.body.id });
+      assert.match(explainDraft.body.content!, /account the money came from/);
+      assert.equal(explainDraft.body.id, draft.body.id);
+      assert.equal(explainDraft.body.requiresClarification, true);
+      const howTo = await chat(a.token, 'How do transfers work?', { clarificationId: draft.body.id });
+      assert.match(howTo.body.content!, /not income or spending/);
+      assert.equal(howTo.body.id, draft.body.id);
+      assert.equal(howTo.body.requiresClarification, true);
+      assert.equal((await prisma.aiSession.findUniqueOrThrow({ where: { id: draft.body.id } })).state, 'NEEDS_CLARIFICATION');
+      const account = await chat(a.token, 'Cash', { clarificationId: draft.body.id });
+      assert.equal(account.body.requiresConfirmation, true);
+      const featureQuestion = await chat(a.token, 'How does my budget work?');
+      assert.match(featureQuestion.body.content!, /monthly spending limit/);
+      assert.equal(featureQuestion.body.id, account.body.id);
+      assert.equal(featureQuestion.body.requiresConfirmation, true);
+      assert.equal(await prisma.transaction.count({ where: { userId: a.user.id } }), 4);
+      assert.equal((await prisma.aiSession.findUniqueOrThrow({ where: { id: account.body.id } })).state, 'AWAITING_CONFIRMATION');
+      assert.equal((await chat(a.token, 'cancel', { confirmationId: account.body.id })).status, 200);
+    } finally {
+      await new Promise<void>((resolve, reject) => conversationServer.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  await t.test('conversational Gemini replies use fresh server facts, aliases and history; fabricated numbers fall back', async () => {
+    const f = await fixture();
+    await prisma.wallet.update({ where: { id: f.wallet.id }, data: { name: 'Private Cash' } });
+    await withFinancialOperation(f.user.id, tx => recordMovement(tx, f.user.id, { walletId: f.wallet.id, type: 'INCOME', amount: 2500, category: 'Salary', description: 'Private ledger description', date: new Date() }));
+    const express = (await import('express')).default;
+    const { authenticate } = await import('../src/middlewares/auth.middleware');
+    const { processAiChat } = await import('../src/controllers/aiCommand.controller');
+    const chatApp = express(); chatApp.use(express.json()); chatApp.post('/chat', authenticate, processAiChat);
+    const chatServer = chatApp.listen(0, '127.0.0.1');
+    await new Promise<void>(resolve => chatServer.once('listening', resolve));
+    const address = chatServer.address(); assert.ok(address && typeof address !== 'string');
+    const chatBase = `http://127.0.0.1:${address.port}`;
+    const originalFetch = globalThis.fetch, oldKey = process.env.GEMINI_API_KEY;
+    let captured = '', hallucinate = false;
+    process.env.GEMINI_API_KEY = 'synthetic-audit-key';
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.startsWith(chatBase)) return originalFetch(input, init);
+      assert.ok(url.includes('generativelanguage.googleapis.com'));
+      captured = String(init?.body);
+      const body = JSON.parse(captured) as { contents: Array<{ parts: Array<{ text: string }> }> };
+      const payload = JSON.parse(body.contents[0]!.parts[0]!.text) as { verifiedAnswer: string };
+      return Response.json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify({ reply: hallucinate ? 'You have ₱999999 available.' : payload.verifiedAnswer }) }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10, totalTokenCount: 30 } });
+    };
+    const chat = async (message: string) => {
+      const response = await fetch(chatBase + '/chat', { method: 'POST', headers: { Authorization: 'Bearer ' + f.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+      assert.equal(response.status, 200);
+      return await response.json() as { content: string; model: string; requiresConfirmation?: boolean };
+    };
+    try {
+      const balance = await chat('What is my account balance?');
+      assert.match(balance.model, /^gemini-/);
+      assert.match(balance.content, /Private Cash: ₱12,500\.00/);
+      assert.ok(!captured.includes('Private Cash') && !captured.includes('Private ledger description'));
+      assert.ok(captured.includes('verifiedReferences') && captured.includes('[[fact_'));
+      await chat('what? i dont get it');
+      assert.ok(captured.includes('What is my account balance?'));
+      assert.equal(((await prisma.aiSession.findFirstOrThrow({ where: { userId: f.user.id }, orderBy: { createdAt: 'desc' } })).pendingAction as { kind?: string }).kind, 'CORE_CONVERSATION');
+      await withFinancialOperation(f.user.id, tx => recordMovement(tx, f.user.id, { walletId: f.wallet.id, type: 'INCOME', amount: 500, category: 'Salary', description: 'Additional synthetic income', date: new Date() }));
+      const fresh = await chat('How much income have I received?');
+      assert.match(fresh.content, /recorded ₱3,000\.00/);
+      hallucinate = true;
+      const rejected = await chat('How much income have I received?');
+      assert.equal(rejected.model, 'local-core-conversation-v1');
+      assert.match(rejected.content, /recorded ₱3,000\.00/);
+      assert.doesNotMatch(rejected.content, /999999/);
+      assert.notEqual(rejected.requiresConfirmation, true);
+      assert.equal(await prisma.transaction.count({ where: { userId: f.user.id } }), 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = oldKey;
+      await new Promise<void>((resolve, reject) => chatServer.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  await t.test('email registration requires a one-use OTP before sign-in and onboarding', async () => {
+    const nodemailer = (await import('nodemailer')).default;
+    const originalTransport = nodemailer.createTransport;
+    const oldHost = process.env.SMTP_HOST;
+    const oldFrom = process.env.MAIL_FROM;
+    let code = '';
+    process.env.SMTP_HOST = 'synthetic-mail.example.test';
+    process.env.MAIL_FROM = 'test@example.test';
+    nodemailer.createTransport = (() => ({ sendMail: async (mail: { text: string }) => {
+      code = mail.text.match(/code is: (\d{6})/)![1];
+      return { accepted: ['synthetic recipient'] };
+    } })) as typeof nodemailer.createTransport;
+    try {
+      const existing = await fixture();
+      const prior = await auth.loginUser({ email: existing.user.email, password });
+      const email = randomUUID() + '@example.test';
+      const input = { firstName: 'New', lastName: 'User', gender: 'Female', email, password };
+      const signup = await fetch(base + '/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: 'refreshToken=' + prior.refreshToken }, body: JSON.stringify(input) });
+      assert.equal(signup.status, 201);
+      const result = await signup.json() as { requiresEmailVerification: boolean; challengeId: string; accessToken?: string; refreshToken?: string; code?: string };
+      assert.equal(result.requiresEmailVerification, true);
+      assert.equal(result.accessToken, undefined);
+      assert.equal(result.refreshToken, undefined);
+      assert.equal(result.code, undefined);
+      assert.match(signup.headers.get('set-cookie')!, /refreshToken=;/);
+      await assert.rejects(auth.refreshUserSession(prior.refreshToken), /no longer active/);
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      assert.equal(user.localCredentialVerified, false);
+      assert.equal(user.emailVerified, null);
+      assert.equal(user.onboardingCompletedAt, null);
+      assert.equal(await prisma.aiSession.count({ where: { userId: user.id } }), 0);
+      const login = () => fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      const denied = await login();
+      assert.equal(denied.status, 401);
+      assert.match((await denied.json() as { message: string }).message, /verify your email/);
+      assert.match(code, /^\d{6}$/);
+      const verify = () => fetch(base + '/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challengeId: result.challengeId, code }) });
+      assert.equal((await verify()).status, 200);
+      assert.equal((await verify()).status, 400);
+      const allowed = await login();
+      assert.equal(allowed.status, 200);
+      const signedIn = await allowed.json() as { user: { onboardingComplete: boolean; onboardingStep: number }; accessToken: string };
+      assert.equal(signedIn.user.onboardingComplete, false);
+      assert.equal(signedIn.user.onboardingStep, 1);
+      assert.ok(signedIn.accessToken);
+    } finally {
+      nodemailer.createTransport = originalTransport;
+      if (oldHost === undefined) delete process.env.SMTP_HOST; else process.env.SMTP_HOST = oldHost;
+      if (oldFrom === undefined) delete process.env.MAIL_FROM; else process.env.MAIL_FROM = oldFrom;
+    }
+  });
+
+  await t.test('recovery requires an emailed OTP, exposes no development shortcut and revokes sessions after reset', async () => {
+    const nodemailer = (await import('nodemailer')).default;
+    const original = nodemailer.createTransport, oldHost = process.env.SMTP_HOST, oldFrom = process.env.MAIL_FROM;
+    let code = '', sent = 0;
+    process.env.SMTP_HOST = 'synthetic-mail.example.test'; process.env.MAIL_FROM = 'test@example.test';
+    nodemailer.createTransport = (() => ({ sendMail: async (mail: { text: string }) => { code = mail.text.match(/code is: (\d{6})/)![1]; sent++; return {}; } })) as typeof nodemailer.createTransport;
+    try {
+      const f = await fixture();
+      const prior = await auth.loginUser({ email: f.user.email, password });
+      const response = await api(f.token, '/auth/forgot-password', 'POST', { email: f.user.email });
+      assert.equal(response.status, 200);
+      const challenge = response.body as unknown as { challengeId: string; expiresInSeconds: number; code?: string; developmentResetUrl?: string; resetToken?: string };
+      assert.match(challenge.challengeId, /^[a-f0-9-]{36}$/);
+      assert.equal(challenge.expiresInSeconds, 600);
+      assert.equal(challenge.code, undefined); assert.equal(challenge.developmentResetUrl, undefined); assert.equal(challenge.resetToken, undefined);
+      const unknown = await api(f.token, '/auth/forgot-password', 'POST', { email: randomUUID() + '@example.test' });
+      assert.equal(unknown.status, 200);
+      assert.deepEqual(Object.keys(unknown.body).sort(), Object.keys(response.body).sort());
+      assert.equal(sent, 1);
+      const incorrect = code === '000000' ? '111111' : '000000';
+      assert.equal((await api(f.token, '/auth/verify-reset-code', 'POST', { challengeId: challenge.challengeId, code: incorrect })).status, 400);
+      const verified = await api(f.token, '/auth/verify-reset-code', 'POST', { challengeId: challenge.challengeId, code });
+      assert.equal(verified.status, 200);
+      const resetToken = (verified.body as unknown as { resetToken: string }).resetToken;
+      assert.equal((await api(f.token, '/auth/verify-reset-code', 'POST', { challengeId: challenge.challengeId, code })).status, 400);
+      assert.equal((await api(f.token, '/auth/reset-password', 'POST', { token: resetToken, newPassword: 'Replacement123!' })).status, 200);
+      assert.equal((await api(f.token, '/auth/reset-password', 'POST', { token: resetToken, newPassword: 'Attacker123!' })).status, 400);
+      assert.equal((await api(f.token, '/wallets')).status, 401);
+      await assert.rejects(auth.refreshUserSession(prior.refreshToken));
+      await assert.rejects(auth.loginUser({ email: f.user.email, password }));
+      assert.ok((await auth.loginUser({ email: f.user.email, password: 'Replacement123!' })).accessToken);
+    } finally {
+      nodemailer.createTransport = original;
+      if (oldHost === undefined) delete process.env.SMTP_HOST; else process.env.SMTP_HOST = oldHost;
+      if (oldFrom === undefined) delete process.env.MAIL_FROM; else process.env.MAIL_FROM = oldFrom;
+    }
+  });
+
+  await t.test('OTP attempts, expiry, resend invalidation, purpose and concurrency are enforced by shared storage', async () => {
+    const nodemailer = (await import('nodemailer')).default;
+    const original = nodemailer.createTransport, oldHost = process.env.SMTP_HOST, oldFrom = process.env.MAIL_FROM;
+    const { requestEmailOtp } = await import('../src/services/emailOtp');
+    let code = '';
+    process.env.SMTP_HOST = 'synthetic-mail.example.test'; process.env.MAIL_FROM = 'test@example.test';
+    nodemailer.createTransport = (() => ({ sendMail: async (mail: { text: string }) => { code = mail.text.match(/code is: (\d{6})/)![1]; return {}; } })) as typeof nodemailer.createTransport;
+    try {
+      const locked = await fixture();
+      const first = await requestEmailOtp(locked.user.email, 'PASSWORD_RESET');
+      const originalCode = code;
+      const wrong = code === '000000' ? '111111' : '000000';
+      for (let index = 0; index < 5; index++) await assert.rejects(auth.verifyPasswordResetCode(first.challengeId, wrong), /Invalid or expired/);
+      assert.ok((await prisma.token.findUniqueOrThrow({ where: { id: first.challengeId } })).revokedAt);
+      await assert.rejects(auth.verifyPasswordResetCode(first.challengeId, originalCode));
+      assert.ok((await auth.loginUser({ email: locked.user.email, password })).accessToken, 'Failed reset guesses do not lock the account');
+
+      const expired = await fixture();
+      const stale = await requestEmailOtp(expired.user.email, 'PASSWORD_RESET');
+      await assert.rejects(auth.verifyUserEmailCode(stale.challengeId, code));
+      await prisma.token.update({ where: { id: stale.challengeId }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      await assert.rejects(auth.verifyPasswordResetCode(stale.challengeId, code));
+
+      const resent = await fixture();
+      const oldChallenge = await requestEmailOtp(resent.user.email, 'PASSWORD_RESET'), oldCode = code;
+      await assert.rejects(requestEmailOtp(resent.user.email, 'PASSWORD_RESET'), /wait one minute/);
+      const limited = await fetch(base + '/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: resent.user.email }) });
+      assert.equal(limited.status, 429);
+      const limitedBody = await limited.json() as { retryAfterSeconds: number };
+      assert.ok(limitedBody.retryAfterSeconds > 0 && limitedBody.retryAfterSeconds <= 60, JSON.stringify(limitedBody));
+      assert.equal(Number(limited.headers.get('Retry-After')), limitedBody.retryAfterSeconds);
+      const key = createHash('sha256').update(`otp-send-minute:PASSWORD_RESET:${resent.user.email}`).digest('hex');
+      await prisma.rateLimitBucket.update({ where: { key }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      const latest = await requestEmailOtp(resent.user.email, 'PASSWORD_RESET'), latestCode = code;
+      await assert.rejects(auth.verifyPasswordResetCode(oldChallenge.challengeId, oldCode));
+      const attempts = await Promise.allSettled([auth.verifyPasswordResetCode(latest.challengeId, latestCode), auth.verifyPasswordResetCode(latest.challengeId, latestCode)]);
+      assert.equal(attempts.filter(item => item.status === 'fulfilled').length, 1);
+      assert.equal(await prisma.token.count({ where: { userId: resent.user.id, type: 'PASSWORD_RESET', consumedAt: null, revokedAt: null, NOT: { token: { startsWith: 'otp:' } } } }), 1);
+
+      const failed = await fixture();
+      nodemailer.createTransport = (() => ({ sendMail: async () => { throw new Error('Synthetic delivery failure'); } })) as typeof nodemailer.createTransport;
+      const undelivered = await requestEmailOtp(failed.user.email, 'PASSWORD_RESET');
+      assert.ok((await prisma.token.findUniqueOrThrow({ where: { id: undelivered.challengeId } })).revokedAt);
+    } finally {
+      nodemailer.createTransport = original;
+      if (oldHost === undefined) delete process.env.SMTP_HOST; else process.env.SMTP_HOST = oldHost;
+      if (oldFrom === undefined) delete process.env.MAIL_FROM; else process.env.MAIL_FROM = oldFrom;
+    }
+  });
+
+  await t.test('missing SMTP cannot issue recovery shortcuts or create an auto-verified account', async () => {
+    const oldHost = process.env.SMTP_HOST, oldFrom = process.env.MAIL_FROM;
+    delete process.env.SMTP_HOST; delete process.env.MAIL_FROM;
+    try {
+      const f = await fixture();
+      const known = await api(f.token, '/auth/forgot-password', 'POST', { email: f.user.email });
+      const unknown = await api(f.token, '/auth/forgot-password', 'POST', { email: randomUUID() + '@example.test' });
+      assert.equal(known.status, 503); assert.equal(unknown.status, 503);
+      assert.deepEqual(known.body, unknown.body);
+      assert.deepEqual(Object.keys(known.body), ['message']);
+      // Repeated server-configuration failures must never use up the hourly IP
+      // recovery quota, or conceal the setup problem behind an unrelated 429.
+      for (let attempt = 0; attempt < 7; attempt++) {
+        const response = await fetch(base + '/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.user.email }) });
+        assert.equal(response.status, 503);
+        assert.equal(response.headers.get('RateLimit-Limit'), null);
+      }
+      assert.equal((await api(f.token, '/auth/resend-verification', 'POST', { email: f.user.email })).status, 503);
+      const email = randomUUID() + '@example.test';
+      assert.equal((await api(f.token, '/auth/signup', 'POST', { firstName: 'New', lastName: 'User', gender: 'Female', email, password })).status, 503);
+      assert.equal(await prisma.user.count({ where: { email } }), 0);
+    } finally {
+      if (oldHost === undefined) delete process.env.SMTP_HOST; else process.env.SMTP_HOST = oldHost;
+      if (oldFrom === undefined) delete process.env.MAIL_FROM; else process.env.MAIL_FROM = oldFrom;
+    }
+  });
+
+  await t.test('configured email requests still enforce the hourly IP limit and report its retry delay', async () => {
+    const oldHost = process.env.SMTP_HOST, oldFrom = process.env.MAIL_FROM;
+    process.env.SMTP_HOST = 'synthetic-mail.example.test'; process.env.MAIL_FROM = 'test@example.test';
+    try {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const response = await fetch(base + '/auth/resend-verification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: randomUUID() + '@example.test' }) });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('RateLimit-Limit'), '5');
+      }
+      const blocked = await fetch(base + '/auth/resend-verification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: randomUUID() + '@example.test' }) });
+      assert.equal(blocked.status, 429);
+      const body = await blocked.json() as { retryAfterSeconds: number };
+      assert.ok(body.retryAfterSeconds > 0 && body.retryAfterSeconds <= 3600);
+      assert.equal(Number(blocked.headers.get('Retry-After')), body.retryAfterSeconds);
+      assert.equal(blocked.headers.get('RateLimit-Remaining'), '0');
+    } finally {
+      if (oldHost === undefined) delete process.env.SMTP_HOST; else process.env.SMTP_HOST = oldHost;
+      if (oldFrom === undefined) delete process.env.MAIL_FROM; else process.env.MAIL_FROM = oldFrom;
+    }
+  });
 
   await t.test('RBAC separates user finance access from administrator access', async () => {
     const regular = await fixture();
@@ -181,7 +678,10 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     assert.equal(plus.body.limits.receiptScans, 100);
     const cancelled = await api(f.token, '/subscriptions/cancel', 'POST', {});
     assert.equal(cancelled.status, 200);
-    assert.equal(cancelled.body.cancelAtPeriodEnd, true);
+    assert.equal(cancelled.body.plan, 'FREE');
+    assert.equal(cancelled.body.cancelAtPeriodEnd, false);
+    assert.equal(cancelled.body.limits.aiRequests, 10);
+    assert.equal(cancelled.body.limits.receiptScans, 5);
   });
   await t.test('a failed scan can restore its reserved monthly quota', async () => {
     const f = await fixture();
@@ -189,6 +689,65 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     assert.equal((await getSubscriptionSummary(f.user.id)).used.receiptScans, 1);
     await refundUsage(f.user.id, 'receiptScans', usage.id);
     assert.equal((await getSubscriptionSummary(f.user.id)).used.receiptScans, 0);
+  });
+  await t.test('hosted test checkout verifies provider payment, preserves ownership and fulfills only once', async () => {
+    const f = await fixture(), other = await fixture();
+    const originalFetch = globalThis.fetch;
+    const previousMode = process.env.BILLING_MODE;
+    const previousKey = process.env.PAYMONGO_SECRET_KEY;
+    process.env.BILLING_MODE = 'paymongo_test';
+    process.env.PAYMONGO_SECRET_KEY = 'sk_test_example';
+    const sessions = new Map<string, { id: string; type: string; attributes: Record<string, unknown> }>();
+    let creations = 0;
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url === 'https://api.paymongo.com/v2/checkout_sessions') {
+        const attributes = JSON.parse(String(init?.body)).data.attributes;
+        const id = `cs_test_${++creations}`;
+        const session = { id, type: 'checkout_session', attributes: { ...attributes, status: 'active', livemode: false, checkout_url: `https://checkout.paymongo.com/${id}`, payments: [] } };
+        sessions.set(id, session);
+        return Response.json({ data: session });
+      }
+      if (url.startsWith('https://api.paymongo.com/v1/checkout_sessions/')) {
+        return Response.json({ data: sessions.get(url.split('/').at(-1)!) });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      const path = '/subscriptions/paymongo/test/checkout';
+      assert.equal((await api(f.token, path, 'POST', {})).status, 201);
+      assert.equal((await api(f.token, '/subscriptions/me')).body.plan, 'FREE');
+      assert.equal((await api(f.token, path, 'POST', {})).status, 201);
+      assert.equal(creations, 1, 'pending checkout is reused');
+      assert.equal((await api(f.token, '/subscriptions/me?payment=success')).body.plan, 'FREE', 'a return URL cannot grant Plus');
+      assert.equal((await api(other.token, '/subscriptions/paymongo/test/verify', 'POST', { checkoutId: 'cs_test_1' })).body.plan, 'FREE');
+      const session = sessions.get('cs_test_1')!;
+      session.attributes.payments = [{ id: 'pay_test', type: 'payment', attributes: { status: 'paid', amount: 9900, currency: 'PHP', livemode: false } }];
+      session.attributes.reference_number = other.user.id;
+      assert.equal((await api(f.token, '/subscriptions/paymongo/test/verify', 'POST', {})).status, 409);
+      session.attributes.reference_number = f.user.id;
+      session.attributes.livemode = true;
+      assert.equal((await api(f.token, '/subscriptions/paymongo/test/verify', 'POST', {})).status, 502);
+      session.attributes.livemode = false;
+      const results = await Promise.all([api(f.token, '/subscriptions/paymongo/test/verify', 'POST', {}), api(f.token, '/subscriptions/paymongo/test/verify', 'POST', {})]);
+      assert.ok(results.every(result => result.status === 200 && result.body.plan === 'PLUS'));
+      assert.equal(await prisma.billingEvent.count({ where: { providerEventId: 'paymongo-test-checkout:cs_test_1' } }), 1);
+      const paid = await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } });
+      assert.equal(paid.currentPeriodEnd.getTime() - paid.currentPeriodStart.getTime(), 30 * 86_400_000);
+      assert.equal((await api(f.token, path, 'POST', {})).status, 409);
+      assert.equal((await api(f.token, '/subscriptions/cancel', 'POST', {})).body.plan, 'FREE');
+      assert.equal((await api(f.token, '/subscriptions/paymongo/test/verify', 'POST', {})).body.plan, 'FREE', 'old payment cannot reactivate a downgrade');
+      assert.equal((await api(f.token, path, 'POST', {})).status, 201);
+      assert.equal(creations, 2);
+      assert.equal((await api(f.token, '/subscriptions/cancel', 'POST', {})).body.plan, 'FREE', 'pending test checkout can be cancelled');
+      process.env.PAYMONGO_SECRET_KEY = 'sk_live_example';
+      assert.equal((await api(other.token, path, 'POST', {})).status, 503);
+      assert.equal(creations, 2, 'live key never creates a checkout');
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousMode === undefined) delete process.env.BILLING_MODE; else process.env.BILLING_MODE = previousMode;
+      if (previousKey === undefined) delete process.env.PAYMONGO_SECRET_KEY; else process.env.PAYMONGO_SECRET_KEY = previousKey;
+    }
   });
   await t.test('loan principal collection is cash received but not earned income', async () => {
     const f = await fixture();
@@ -232,7 +791,8 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
       assert.equal((await api(f.token, '/subscriptions/me')).body.paymentPending, false);
       const event = { data: { id: `evt-${randomUUID()}`, attributes: { type: 'subscription.activated', livemode: false, data: { id: 'sub-delete-test', type: 'subscription', attributes: { status: 'active' } } } } };
       const raw = JSON.stringify(event);
-      const signature = createHmac('sha256', process.env.PAYMONGO_WEBHOOK_SECRET!).update(raw).digest('hex');
+      const signingTime = String(Math.floor(Date.now() / 1000));
+      const signature = 't=' + signingTime + ',' + (JSON.parse(raw).data.attributes.livemode ? 'li' : 'te') + '=' + createHmac('sha256', process.env.PAYMONGO_WEBHOOK_SECRET!).update(signingTime + '.').update(raw).digest('hex');
       const webhook = await originalFetch(`${base}/subscriptions/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'paymongo-signature': signature }, body: raw });
       assert.equal(webhook.status, 200);
       assert.equal((await api(f.token, '/subscriptions/me')).body.plan, 'FREE');
@@ -258,7 +818,8 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
       const invoice = type.startsWith('subscription.invoice.');
       const payload = { data: { id: `evt-${randomUUID()}`, attributes: { type, livemode: false, created_at: timestamp + offset, data: { id: invoice ? `inv-${randomUUID()}` : subscriptionId, type: invoice ? 'invoice' : 'subscription', attributes: { status, ...(invoice ? { resource_id: subscriptionId } : {}) } } } } };
       const raw = JSON.stringify(payload);
-      const signature = createHmac('sha256', process.env.PAYMONGO_WEBHOOK_SECRET!).update(raw).digest('hex');
+      const signingTime = String(Math.floor(Date.now() / 1000));
+      const signature = 't=' + signingTime + ',' + (JSON.parse(raw).data.attributes.livemode ? 'li' : 'te') + '=' + createHmac('sha256', process.env.PAYMONGO_WEBHOOK_SECRET!).update(signingTime + '.').update(raw).digest('hex');
       return fetch(`${base}/subscriptions/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'paymongo-signature': signature }, body: raw });
     }
     try {
@@ -324,6 +885,57 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     assert.equal(after.body.limits?.aiRequests, before.body.limits?.aiRequests);
     const usage = await prisma.usagePeriod.findFirst({ where: { userId: f.user.id } });
     assert.equal(usage?.aiRequests, 0);
+  });
+  await t.test('AI clarification keeps explicit facts, uses owned exact wallets, and stores short replies', async () => {
+    const f = await fixture();
+    await prisma.wallet.create({ data: { userId: f.user.id, name: 'GCash', openingBalance: 500, kind: 'ASSET' } });
+    const first = await api(f.token, '/ai/chat', 'POST', { message: 'spent 100 on jeepney fare today' });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.requiresClarification, true);
+    assert.deepEqual(first.body.walletOptions, ['Cash', 'GCash']);
+    const second = await api(f.token, '/ai/chat', 'POST', { message: "it's cash no wallet or account used", clarificationId: first.body.id });
+    assert.equal(second.body.requiresConfirmation, true);
+    const draft = await prisma.aiSession.findUniqueOrThrow({ where: { id: second.body.id } });
+    assert.equal(draft.question, "it's cash no wallet or account used");
+    assert.deepEqual(JSON.parse(JSON.stringify(draft.pendingAction)), {
+      intent: 'LOG_TRANSACTION', amount: 100, transactionType: 'EXPENSE', category: 'Transport', description: 'jeepney fare today', date: 'today', walletName: 'Cash',
+    });
+    const confirmed = await api(f.token, '/ai/chat', 'POST', { message: 'confirm', confirmationId: second.body.id });
+    assert.equal(confirmed.status, 200);
+    const movement = await prisma.transaction.findFirstOrThrow({ where: { userId: f.user.id } });
+    assert.equal(movement.walletId, f.wallet.id);
+    assert.equal(Number(movement.amount), 100);
+    assert.equal(movement.category, 'Transport');
+    const replay = await api(f.token, '/ai/chat', 'POST', { message: 'confirm', confirmationId: second.body.id });
+    assert.equal(replay.status, 200);
+    assert.equal(await prisma.transaction.count({ where: { userId: f.user.id } }), 1);
+  });
+  await t.test('AI drafts survive quota errors and can be cancelled without a confirmation ID', async () => {
+    const f = await fixture();
+    const first = await api(f.token, '/ai/chat', 'POST', { message: 'spent 100 on fare today' });
+    await prisma.usagePeriod.updateMany({ where: { userId: f.user.id }, data: { aiRequests: 10 } });
+    assert.equal((await api(f.token, '/ai/chat', 'POST', { message: 'Cash', clarificationId: first.body.id })).status, 429);
+    assert.equal((await prisma.aiSession.findUniqueOrThrow({ where: { id: first.body.id } })).state, 'NEEDS_CLARIFICATION');
+    const cancelled = await api(f.token, '/ai/chat', 'POST', { message: 'cancel', clarificationId: first.body.id });
+    assert.equal(cancelled.status, 200);
+    assert.equal((await prisma.aiSession.findUniqueOrThrow({ where: { id: first.body.id } })).state, 'CANCELLED');
+  });
+  await t.test('unknown wallets prompt available accounts and legacy chat history is readable', async () => {
+    const f = await fixture();
+    const first = await api(f.token, '/ai/chat', 'POST', { message: 'spent 100 on fare from Missing Bank today' });
+    assert.equal(first.body.requiresClarification, true);
+    assert.deepEqual(first.body.walletOptions, ['Cash']);
+    const second = await api(f.token, '/ai/chat', 'POST', { message: 'Cash', clarificationId: first.body.id });
+    assert.equal(second.body.requiresConfirmation, true);
+    await api(f.token, '/ai/chat', 'POST', { message: 'cancel', confirmationId: second.body.id });
+    const legacy = await prisma.aiSession.create({ data: { userId: f.user.id, question: 'spent 100 on fare today. Additional detail: cash. Additional detail: 100', answer: 'Which wallet?', state: 'NEEDS_CLARIFICATION', model: 'test', promptTokens: 0, responseTokens: 0, totalTokens: 0, pendingAction: { intent: 'CLARIFY', amount: null } } });
+    const history = await api(f.token, '/ai/history');
+    assert.equal((history.body as unknown as Array<{ id: string; question: string }>).find(turn => turn.id === legacy.id)?.question, '100');
+    const recovered = await api(f.token, '/ai/chat', 'POST', { message: 'Cash', clarificationId: legacy.id });
+    assert.equal(recovered.body.requiresConfirmation, true);
+    assert.match(recovered.body.content!, /₱100\.00.*Transport.*Cash.*today/);
+    const stale = await api(f.token, '/ai/chat', 'POST', { message: 'cancel' });
+    assert.equal(stale.status, 200);
   });
   await t.test('bill reversal preserves later payments and blocks parent deletion', async () => {
     const f = await fixture();

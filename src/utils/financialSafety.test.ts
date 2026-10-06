@@ -51,9 +51,9 @@ test('completed historical periods do not shrink as time passes; monthly budgets
   const start = new Date(2026, 7, 1), end = new Date(2026, 8, 1); end.setMilliseconds(-1);
   assert.equal(periodForecast(1000, start, end, new Date(2026, 8, 25)), 1000);
   assert.equal(periodForecast(1000, start, end, new Date(2027, 0, 1)), 1000);
-  const full = reportMonths(new Date(2026, 0, 1), new Date(2026, 2, 1, 0, 0, 0, -1));
+  const full = reportMonths(new Date('2026-01-01T00:00:00+08:00'), new Date('2026-02-28T23:59:59.999+08:00'));
   assert.deepEqual(full.map(value => value.fraction), [1, 1]);
-  assert.equal(reportMonths(new Date(2026, 8, 1), new Date(2026, 8, 8, 0, 0, 0, -1))[0].fraction, 7 / 30);
+  assert.equal(reportMonths(new Date('2026-09-01T00:00:00+08:00'), new Date('2026-09-07T23:59:59.999+08:00'))[0].fraction, 7 / 30);
 });
 test('refresh tokens have independent random identities even within one second', () => {
   const old = process.env.JWT_REFRESH_SECRET;

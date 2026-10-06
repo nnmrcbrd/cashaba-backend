@@ -4,7 +4,8 @@ import bcrypt from 'bcryptjs';
 import { normalizeGoogleName, type GoogleUserProfile } from '@/utils/googleProfile';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { withFinancialOperation, type FinancialTx } from './financialOperation';
-import { assertMailConfigured, sendAccountLink } from './mail';
+import { assertOtpMailConfigured } from './mail';
+import { requestEmailOtp, consumeEmailOtp, OTP_TTL_MS } from './emailOtp';
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -38,14 +39,25 @@ async function session(tx: FinancialTx, userId: string, authMethod: AuthMethod) 
 }
 interface RegistrationData { firstName: string; lastName: string; email: string; password: string; gender?: string; role?: Array<'STUDENT' | 'WORKING' | 'FREELANCE' | 'MARRIED'> }
 export async function registerUser(data: RegistrationData) {
-  assertMailConfigured();
+  assertOtpMailConfigured();
   if (await prisma.user.findUnique({ where: { email: data.email } })) throw new Error('Email is already registered. Sign in or reset your password.');
-  const rawToken = randomBytes(32).toString('hex');
   const password = await bcrypt.hash(data.password, 12);
-  const user = await prisma.user.create({ data: { firstName: data.firstName, lastName: data.lastName, email: data.email, password, gender: data.gender, roles: data.role || [], accountRole: 'USER', localCredentialVerified: false, tokens: { create: { token: tokenFingerprint(rawToken), type: 'VERIFICATION', expiresAt: new Date(Date.now() + 3_600_000) } } } });
-  try { await sendAccountLink(user.email, rawToken, 'verify'); }
-  catch { throw new Error('Your account was created, but email delivery failed. Use password recovery to verify your email and choose a new password.'); }
-  return user;
+  const user = await prisma.user.create({ data: { firstName: data.firstName, lastName: data.lastName, email: data.email, password, gender: data.gender, roles: data.role || [], accountRole: 'USER', localCredentialVerified: false } });
+  const verification = await requestEmailOtp(user.email, 'VERIFICATION');
+  return { ...user, verification };
+}
+export async function verifyUserEmailCode(challengeId: string, code: string) {
+  return consumeEmailOtp(challengeId, code, 'VERIFICATION', async (tx, userId) => {
+    await tx.user.update({ where: { id: userId }, data: { emailVerified: new Date(), localCredentialVerified: true } });
+    return { message: 'Email verified. You can now sign in.' };
+  });
+}
+export async function verifyPasswordResetCode(challengeId: string, code: string) {
+  return consumeEmailOtp(challengeId, code, 'PASSWORD_RESET', async (tx, userId) => {
+    const resetToken = randomBytes(32).toString('hex');
+    await tx.token.create({ data: { userId, type: 'PASSWORD_RESET', token: tokenFingerprint(resetToken), expiresAt: new Date(Date.now() + OTP_TTL_MS) } });
+    return { resetToken };
+  });
 }
 export async function verifyUserEmail(raw: string) {
   const token = await prisma.token.findUnique({ where: { token: tokenFingerprint(raw) } });
@@ -124,20 +136,6 @@ export async function changeUserPassword(userId: string, currentPassword: string
     await replacePassword(tx, userId, await bcrypt.hash(newPassword, 12));
     return true;
   });
-}
-export async function requestPasswordReset(email: string): Promise<string | null> {
-  assertMailConfigured();
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) return null;
-  const rawToken = randomBytes(32).toString('hex');
-  const record = await prisma.token.create({ data: { userId: user.id, token: tokenFingerprint(rawToken), type: 'PASSWORD_RESET', expiresAt: new Date(Date.now() + 3_600_000) } });
-  try { await sendAccountLink(email, rawToken, 'reset'); }
-  catch (error) {
-    await prisma.token.update({ where: { id: record.id }, data: { revokedAt: new Date() } });
-    console.error('Account recovery delivery failed', error instanceof Error ? error.name : 'mail error');
-    // Same public response for existing and unknown addresses.
-  }
-  return process.env.NODE_ENV !== 'production' && !process.env.SMTP_HOST ? rawToken : null;
 }
 export async function resetUserPassword(rawToken: string, newPassword: string) {
   const token = await prisma.token.findUnique({ where: { token: tokenFingerprint(rawToken) } });

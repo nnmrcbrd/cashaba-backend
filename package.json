@@ -16,7 +16,8 @@
     "test:integration": "tsx --test test/*.integration.ts",
     "test:reports": "tsx --test ../casha-ba-frontend/lib/pdfExport.test.ts",
     "smoke:api": "tsx src/scripts/smoke-api.ts",
-    "check:production": "tsx src/scripts/check-production.ts"
+    "check:production": "tsx src/scripts/check-production.ts",
+    "check:email": "tsx src/scripts/check-email.ts"
   },
   "keywords": [],
   "author": "",

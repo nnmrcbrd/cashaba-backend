@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { prisma, qualifiedTable } from '@/lib/prisma';
 import { getSubscriptionSummary, monthlyPeriod } from '@/services/subscription';
 import { cancelPayMongoSubscription, createCustomer, createPlusPlan, createSubscription, PayMongoError, verifyPayMongoSignature } from '@/services/paymongo';
+import { startTestCheckout, syncTestCheckout } from '@/services/testCheckout';
+import { FinancialError, withFinancialOperation } from '@/services/financialOperation';
 
 const payMongoEventSchema = z.object({
   data: z.object({
@@ -47,7 +49,34 @@ function nextMonthlyPeriod(nextBilling?: string | null) {
 }
 
 export async function getMySubscription(req: Request, res: Response) {
+  const initial = await getSubscriptionSummary(req.user!.userId);
+  if (initial.provider === 'PAYMONGO_TEST' && initial.paymentPending && initial.testCheckoutAvailable) {
+    try { await syncTestCheckout(req.user!.userId); }
+    catch (error) {
+      if (error instanceof PayMongoError) return res.json({ ...initial, checkoutVerificationError: 'PayMongo payment verification is temporarily unavailable. Try checking again.' });
+      throw error;
+    }
+  }
   res.json(await getSubscriptionSummary(req.user!.userId));
+}
+
+export async function startPayMongoTestCheckout(req: Request, res: Response) {
+  try {
+    const checkout = await startTestCheckout(req.user!.userId);
+    res.status(201).json({ checkoutUrl: checkout.attributes.checkout_url, testMode: true, subscription: await getSubscriptionSummary(req.user!.userId) });
+  } catch (error) {
+    if (!handlePayMongoError(error, res)) {
+      if (error instanceof Error && 'status' in error && typeof error.status === 'number') return res.status(error.status).json({ message: error.message });
+      throw error;
+    }
+  }
+}
+
+export async function verifyPayMongoTestCheckout(req: Request, res: Response) {
+  try {
+    await syncTestCheckout(req.user!.userId);
+    res.json(await getSubscriptionSummary(req.user!.userId));
+  } catch (error) { if (!handlePayMongoError(error, res)) throw error; }
 }
 
 export async function startPayMongoSubscription(req: Request, res: Response) {
@@ -99,15 +128,22 @@ export async function cancelSubscription(req: Request, res: Response) {
   try {
     const userId = req.user!.userId;
     const existing = await prisma.subscription.findUnique({ where: { userId } });
-    if (!existing || (existing.plan !== 'PLUS' && !(existing.provider === 'PAYMONGO' && existing.providerSubscriptionId && !['CANCELLED', 'EXPIRED'].includes(existing.status)))) return res.status(409).json({ message: 'There is no active or pending Plus subscription to cancel' });
+    if (!existing || (existing.plan !== 'PLUS' && !(['PAYMONGO', 'PAYMONGO_TEST'].includes(existing.provider) && existing.providerSubscriptionId && !['CANCELLED', 'EXPIRED'].includes(existing.status)))) return res.status(409).json({ message: 'There is no active or pending Plus subscription to cancel' });
     if (existing.provider === 'PAYMONGO' && existing.providerSubscriptionId) {
       await cancelPayMongoSubscription(existing.providerSubscriptionId);
       await prisma.subscription.update({ where: { userId }, data: { plan: 'FREE', status: 'CANCELLED', cancelAtPeriodEnd: false, cancelledAt: new Date() } });
+    } else if (existing.provider === 'PAYMONGO_TEST') {
+      await withFinancialOperation(userId, async tx => {
+        const current = await tx.subscription.findUnique({ where: { userId } });
+        if (current?.provider !== existing.provider || current.providerSubscriptionId !== existing.providerSubscriptionId) throw new FinancialError('Your checkout changed. Refresh your plan before cancelling.', 409);
+        await tx.subscription.update({ where: { userId }, data: { plan: 'FREE', status: 'CANCELLED', cancelAtPeriodEnd: false, cancelledAt: new Date() } });
+      });
     } else {
-      await prisma.subscription.update({ where: { userId }, data: { cancelAtPeriodEnd: true, cancelledAt: new Date() } });
+      await prisma.subscription.update({ where: { userId }, data: { plan: 'FREE', status: 'CANCELLED', cancelAtPeriodEnd: false, cancelledAt: new Date() } });
     }
     res.json(await getSubscriptionSummary(userId));
   } catch (error) {
+    if (error instanceof FinancialError) return res.status(error.status).json({ message: error.message });
     if (!handlePayMongoError(error, res)) throw error;
   }
 }

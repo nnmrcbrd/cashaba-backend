@@ -1,16 +1,17 @@
+import { businessDate } from "./calendar";
 // Calculate every occurrence from its original anchor, so Jan 31 -> Feb 28 -> Mar 31.
 export function occurrenceDate(anchor: Date, frequency: string, count = 1): Date {
-  const next = new Date(anchor);
-  if (frequency === 'ONE_TIME' || count === 0) return next;
-  if (frequency === 'WEEKLY') { next.setDate(next.getDate() + count * 7); return next; }
+  const next = businessDate(anchor);
+  if (frequency === 'ONE_TIME' || count === 0) return new Date(next.getTime() - 8 * 60 * 60 * 1000);
+  if (frequency === 'WEEKLY') { next.setUTCDate(next.getUTCDate() + count * 7); return new Date(next.getTime() - 8 * 60 * 60 * 1000); }
   const months = frequency === 'MONTHLY' ? 1 : frequency === 'QUARTERLY' ? 3 : frequency === 'YEARLY' ? 12 : 0;
   if (!months) throw new Error('Unsupported recurrence frequency');
-  const day = next.getDate();
-  next.setDate(1);
-  next.setMonth(next.getMonth() + months * count);
-  const last = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
-  next.setDate(Math.min(day, last));
-  return next;
+  const day = next.getUTCDate();
+  next.setUTCDate(1);
+  next.setUTCMonth(next.getUTCMonth() + months * count);
+  const last = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
+  next.setUTCDate(Math.min(day, last));
+  return new Date(next.getTime() - 8 * 60 * 60 * 1000);
 }
 
 export function occurrencesBefore(anchor: Date, frequency: string, end: Date): number {

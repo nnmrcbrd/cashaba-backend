@@ -1,12 +1,13 @@
 import { z } from 'zod';
+import { isFinancialDate } from '@/utils/calendar';
 
-export const positiveMoney = z.coerce.number().positive().finite().max(999_999_999_999.99)
+export const positiveMoney = z.union([z.number(), z.string().trim().regex(/^\d+(?:\.\d{1,2})?$/)]).transform(value => Number(value)).pipe(z.number().positive().finite().max(999_999_999_999.99))
   .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.001, 'Use at most two decimal places');
 export const movementSchema = z.object({
   description: z.string().trim().min(1).max(200),
   type: z.enum(['INCOME', 'EXPENSE', 'TRANSFER', 'ADJUSTMENT', 'SAVINGS_CONTRIBUTION', 'SAVINGS_WITHDRAWAL', 'BILL_PAYMENT', 'DEBT_PAYMENT', 'LOAN_COLLECTION', 'LOAN_PROCEEDS', 'LOAN_DISBURSEMENT']),
   category: z.string().trim().min(1).max(50), amount: positiveMoney,
-  date: z.coerce.date(), walletId: z.string().uuid(),
+  date: z.custom<string | Date>(isFinancialDate, 'Use a valid calendar date or ISO timestamp').pipe(z.coerce.date()), walletId: z.string().uuid(),
   destinationWalletId: z.string().uuid().nullable().optional(),
   savingsGoalId: z.string().uuid().nullable().optional(),
   fixedExpenseId: z.string().uuid().nullable().optional(),

@@ -21,6 +21,11 @@ export const forgotPasswordSchema = z.object({
   email: z.string().trim().email("Invalid email address").transform((email) => email.toLowerCase()),
 });
 
+export const emailOtpSchema = z.object({
+  challengeId: z.string().uuid('Request a new verification code.'),
+  code: z.string().regex(/^\d{6}$/, 'Enter the six-digit code from your email.'),
+});
+
 export const resetPasswordSchema = z.object({
   token: z.string().min(20, "Invalid password reset token"),
   newPassword: signupSchema.shape.password,

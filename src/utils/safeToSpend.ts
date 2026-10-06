@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import type { FinancialTx } from '@/services/financialOperation';
-import { money, roundMoney } from '@/utils/money';
+import { money, roundMoney, WEEKS_PER_MONTH } from '@/utils/money';
+import { businessDate, businessMidnight } from './calendar';
 import { occurrencesBefore } from '@/utils/recurrence';
 
 export interface SafeToSpendBreakdown {
@@ -15,13 +16,13 @@ export function effectivePeriodIncome(configuredIncome: number, actualIncome: nu
   return roundMoney(money(actualIncome));
 }
 export function periodRange(period: string, now = new Date()) {
+  const date = businessDate(now);
+  const year = date.getUTCFullYear(), month = date.getUTCMonth(), day = date.getUTCDate();
   if (period === 'weekly') {
-    const offset = now.getDay() === 0 ? 6 : now.getDay() - 1;
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-    const end = new Date(start); end.setDate(end.getDate() + 7);
-    return { start, end };
+    const offset = date.getUTCDay() === 0 ? 6 : date.getUTCDay() - 1;
+    return { start: businessMidnight(year, month, day - offset), end: businessMidnight(year, month, day - offset + 7) };
   }
-  return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: new Date(now.getFullYear(), now.getMonth() + 1, 1) };
+  return { start: businessMidnight(year, month), end: businessMidnight(year, month + 1) };
 }
 export function scheduledReserve(input: { amount: number; paid: number; due: Date | null; anchor?: Date | null; frequency: string; end: Date; remaining?: number }) {
   const count = input.due ? input.frequency === 'ONE_TIME' ? Number(input.due < input.end) : Math.max(0, occurrencesBefore(input.anchor ?? input.due, input.frequency, input.end) - occurrencesBefore(input.anchor ?? input.due, input.frequency, input.due)) : 1;
@@ -37,7 +38,7 @@ export function savingsReserve(goals: Array<{ id: string; currentAmount: unknown
   let total = 0;
   for (const goal of goals) {
     const actual = Math.max(0, net.get(goal.id) ?? 0);
-    const planned = goal.isCompleted ? 0 : money(goal.monthlyAllocation) / (period === 'weekly' ? 4.33 : 1);
+    const planned = goal.isCompleted ? 0 : money(goal.monthlyAllocation) / (period === 'weekly' ? WEEKS_PER_MONTH : 1);
     const remainingPlan = Math.min(Math.max(0, planned - actual), Math.max(0, money(goal.targetAmount) - money(goal.currentAmount)));
     total += actual + remainingPlan;
     net.delete(goal.id);

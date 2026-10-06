@@ -1,3 +1,4 @@
+import { businessMonth } from "@/utils/calendar";
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { calculateSafeToSpend } from "@/utils/safeToSpend";
@@ -14,11 +15,11 @@ export const getNotifications = async (req: Request, res: Response) => {
     const userId = req.user!.id || req.user!.userId;
 
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const calendar = businessMonth(now);
+    const monthStart = calendar.start, monthEnd = calendar.end;
     const [budget, loans, obligations, setup, monthlyExpenses] = await Promise.all([
       prisma.budget.findUnique({
-        where: { userId_month_year: { userId, month: now.getMonth() + 1, year: now.getFullYear() } },
+        where: { userId_month_year: { userId, month: calendar.month, year: calendar.year } },
       }),
       prisma.loan.findMany({
         where: { userId, status: { in: ["ACTIVE", "OVERDUE"] } },

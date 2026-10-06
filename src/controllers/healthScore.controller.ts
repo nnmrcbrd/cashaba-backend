@@ -1,3 +1,4 @@
+import { businessMonth } from "@/utils/calendar";
 import { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { money } from "@/utils/money";
@@ -19,14 +20,14 @@ export const getHealthScore = async (req: Request, res: Response) => {
     const userId = req.user!.id || req.user!.userId;
 
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const calendar = businessMonth(now);
+    const monthStart = calendar.start, monthEnd = calendar.end;
     const [setup, savingsGoals, loans, budget, monthlyExpenses] = await Promise.all([
       calculateSafeToSpend(userId),
       prisma.savingsGoal.findMany({ where: { userId } }),
       prisma.loan.findMany({ where: { userId, type: 'BORROWED', status: { in: ["ACTIVE", "OVERDUE"] } } }),
       prisma.budget.findUnique({
-        where: { userId_month_year: { userId, month: now.getMonth() + 1, year: now.getFullYear() } },
+        where: { userId_month_year: { userId, month: calendar.month, year: calendar.year } },
       }),
       prisma.transaction.aggregate({
         where: { userId, type: { in: ["EXPENSE", "BILL_PAYMENT", "DEBT_PAYMENT"] }, deletedAt: null, date: { gte: monthStart, lt: monthEnd } },
