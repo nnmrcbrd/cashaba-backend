@@ -54,6 +54,17 @@ exercises the migration with a legacy account, and removes the schema afterward.
 The integration suite does not send email or contact Google. Verify SMTP
 delivery and the real Google browser callback separately before deployment.
 
+## Editable bill estimates
+
+Apply `20261009120000_editable_bill_amounts` with `prisma migrate deploy`
+and regenerate the Prisma client before running the bill-editing backend.
+Users can increase or decrease a bill's current amount through
+`PATCH /api/income-setup/fixed-expenses/:id`. The change also becomes the
+estimate for future installments. Already completed installments retain their
+original amounts, including when payments are reversed. An amount below the
+current installment's recorded payments is rejected. Editing the estimate
+does not record a payment or change wallet balances.
+
 ## October 2 audit fixes
 
 Apply `20261002000000_shared_rate_limits` before deploying this backend to an existing environment. Production rate-limit queries fail closed when the shared store is unavailable. The current fresh baseline includes the same table. No existing financial tables or data are changed by this migration. Integration tests now require TEST_DATABASE_URL unconditionally; ALLOW_ISOLATED_SCHEMA_TESTS no longer enables application-database fallback.

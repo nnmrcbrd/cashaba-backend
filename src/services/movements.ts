@@ -1,8 +1,9 @@
-import type { Prisma, Transaction } from '@/generated/prisma/client';
-import { movementSchema } from '@/schema/movement';
+import type { FixedExpense, Prisma, Transaction } from '@/generated/prisma/client';
+import { movementSchema, positiveMoney } from '@/schema/movement';
 import { FinancialError, type FinancialTx, jsonValue, requireWallet } from './financialOperation';
 import { money, roundMoney } from '@/utils/money';
 import { occurrenceDate } from '@/utils/recurrence';
+import { billAmountSchedule, billProgress, replaceBillAmount } from '@/utils/billAmounts';
 
 type Related = Record<string, string | boolean | null>;
 const includeWallets = {
@@ -25,12 +26,32 @@ async function rebuildBill(tx: FinancialTx, userId: string, id: string) {
   const total = roundMoney(Number(baseline.amountPaid || 0) + paid);
   const anchor = baseline.dueDate ? new Date(String(baseline.dueDate)) : bill.scheduleAnchor ?? bill.createdAt;
   const recurring = bill.frequency !== 'ONE_TIME';
-  const installments = recurring ? Math.floor(Math.round(total * 100) / Math.round(amount * 100)) : 0;
-  const amountPaid = recurring ? roundMoney(total - installments * amount) : total;
+  const progress = billProgress(total, billAmountSchedule(bill.amountSchedule, amount));
+  const installments = recurring ? progress.installments : 0;
+  const amountPaid = recurring ? progress.amountPaid : total;
   const dueDate = recurring ? occurrenceDate(anchor, bill.frequency, installments) : baseline.dueDate ? anchor : null;
   if (!recurring && total > amount) throw new FinancialError('Payment exceeds the obligation');
   const completed = !recurring && amountPaid >= amount;
-  await tx.fixedExpense.update({ where: { id }, data: { amountPaid, dueDate, scheduleAnchor: anchor, status: completed ? 'COMPLETED' : dueDate && dueDate < new Date() ? 'OVERDUE' : amountPaid > 0 ? 'PARTIALLY_PAID' : 'PENDING' } });
+  return tx.fixedExpense.update({ where: { id }, data: { amount: recurring ? progress.amount : amount, amountPaid, dueDate, scheduleAnchor: anchor, status: completed ? 'COMPLETED' : dueDate && dueDate < new Date() ? 'OVERDUE' : amountPaid > 0 ? 'PARTIALLY_PAID' : 'PENDING' } });
+}
+
+// The onboarding amount is an estimate. A correction applies to the current
+// and future installments, while completed installments retain their prices.
+export async function updateBillAmount(tx: FinancialTx, userId: string, bill: FixedExpense, amount: number) {
+  if (amount < money(bill.amountPaid)) throw new FinancialError('The bill amount cannot be less than the amount already paid.');
+  const hasHistory = await tx.transaction.count({ where: { userId, fixedExpenseId: bill.id } });
+  let installment = 0;
+  if (hasHistory && bill.frequency !== 'ONE_TIME') {
+    const { baseline, paid } = await history(tx, userId, { fixedExpenseId: bill.id });
+    installment = billProgress(roundMoney(Number(baseline.amountPaid || 0) + paid), billAmountSchedule(bill.amountSchedule, money(bill.amount))).installments;
+  }
+  const amountSchedule = replaceBillAmount(billAmountSchedule(bill.amountSchedule, money(bill.amount)), installment, amount);
+  const updated = await tx.fixedExpense.update({ where: { id: bill.id }, data: { amount, amountSchedule } });
+  if (hasHistory) return (await rebuildBill(tx, userId, bill.id))!;
+  return tx.fixedExpense.update({ where: { id: bill.id }, data: {
+    status: bill.frequency === 'ONE_TIME' && money(updated.amountPaid) >= amount ? 'COMPLETED'
+      : bill.dueDate && bill.dueDate < new Date() ? 'OVERDUE' : money(updated.amountPaid) > 0 ? 'PARTIALLY_PAID' : 'PENDING',
+  } });
 }
 
 async function rebuildLoan(tx: FinancialTx, userId: string, id: string) {
@@ -66,10 +87,17 @@ export async function recordMovement(tx: FinancialTx, userId: string, input: unk
     await tx.savingsGoal.update({ where: { id: goal.id }, data: { currentAmount: next, isCompleted: next >= money(goal.targetAmount) } });
   }
   if (data.fixedExpenseId) {
-    const bill = await tx.fixedExpense.findFirst({ where: { id: data.fixedExpenseId, userId } });
+    let bill = await tx.fixedExpense.findFirst({ where: { id: data.fixedExpenseId, userId } });
     if (!bill) throw new FinancialError('Obligation not found', 404);
-    if (data.amount > roundMoney(money(bill.amount) - money(bill.amountPaid))) throw new FinancialError('Payment exceeds the remaining obligation');
-    relatedBefore = { kind: 'FixedExpense', id: bill.id, amountPaid: String(bill.amountPaid), status: bill.status, dueDate: bill.dueDate?.toISOString() ?? null };
+    const amountBefore = String(bill.amount);
+    if (data.amount > roundMoney(money(bill.amount) - money(bill.amountPaid))) {
+      // Reconcile the selected bill's onboarding estimate and payment in the
+      // same locked transaction. Smaller payments remain partial payments.
+      const actualAmount = positiveMoney.safeParse(roundMoney(money(bill.amountPaid) + data.amount));
+      if (!actualAmount.success) throw new FinancialError('The resulting bill amount exceeds the supported limit.');
+      bill = await updateBillAmount(tx, userId, bill, actualAmount.data);
+    }
+    relatedBefore = { kind: 'FixedExpense', id: bill.id, amountBefore, amount: String(bill.amount), amountPaid: String(bill.amountPaid), status: bill.status, dueDate: bill.dueDate?.toISOString() ?? null };
   }
   if (data.loanId) {
     const loan = await tx.loan.findFirst({ where: { id: data.loanId, userId } });

@@ -13,6 +13,10 @@ test('switching demo Plus to Free immediately applies Free limits without resett
   let saved = existing;
   const originalSubscription = prisma.subscription;
   const originalUsage = prisma.usagePeriod;
+  const originalUser = prisma.user;
+  const originalOperations = prisma.financialOperation;
+  Object.defineProperty(prisma, 'financialOperation', { configurable: true, value: { findUnique: async () => null } });
+  Object.defineProperty(prisma, 'user', { configurable: true, value: { findUniqueOrThrow: async () => ({ trialStartedAt: new Date() }) } });
   Object.defineProperty(prisma, 'subscription', { configurable: true, value: {
     findUnique: async () => saved,
     update: async ({ data }: { data: Partial<typeof existing> }) => {
@@ -24,6 +28,8 @@ test('switching demo Plus to Free immediately applies Free limits without resett
     findUnique: async () => ({ aiRequests: 12, receiptScans: 3 }),
   } });
   t.after(() => {
+    Object.defineProperty(prisma, 'financialOperation', { configurable: true, value: originalOperations });
+    Object.defineProperty(prisma, 'user', { configurable: true, value: originalUser });
     Object.defineProperty(prisma, 'subscription', { configurable: true, value: originalSubscription });
     Object.defineProperty(prisma, 'usagePeriod', { configurable: true, value: originalUsage });
   });

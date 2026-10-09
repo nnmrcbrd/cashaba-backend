@@ -84,7 +84,7 @@ export const getFinancialInsights = async (req: Request, res: Response) => {
     const safeFacts = { income: totalIncome, spending: totalSpent, safeToSpend, shortfall: Math.max(0, -setup.rawSafeToSpend), savingsPct, weekendSpend, weekdaySpend, activeLoans: loans.length };
     const apiKey = process.env.GEMINI_API_KEY;
     const subscription = await getSubscriptionSummary(userId);
-    if (subscription.plan === 'PLUS' && apiKey && apiKey !== 'dummy_gemini_api_key_here') {
+    if (subscription.plan !== 'FREE' && apiKey && apiKey !== 'dummy_gemini_api_key_here') {
       let usageId: string | null = null;
       try {
         const cacheKey = '__DASHBOARD_INSIGHTS__:v2:' + createHash('sha256').update(JSON.stringify(safeFacts)).digest('hex').slice(0, 24);

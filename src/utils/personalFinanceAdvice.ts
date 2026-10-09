@@ -1,14 +1,17 @@
 import { roundMoney, WEEKS_PER_MONTH } from './money';
 import type { SafeToSpendBreakdown } from './safeToSpend';
 import { z } from 'zod';
+import type { PlanningFacts } from './planningFacts';
+import { statedRecurringAmount } from './planningInputs';
 
 export type PersonalTopic = 'timeline' | 'savings' | 'income' | 'spending' | 'budget' | 'debts' | 'bills' | 'accounts' | 'safe-to-spend';
 export interface AdviceFacts {
+  planning?: PlanningFacts;
   breakdown: SafeToSpendBreakdown;
   incomePeriod: 'weekly' | 'monthly';
   goals: Array<{ name: string; target: number; saved: number; monthlyAllocation: number }>;
   budget: { target: number; spent: number } | null;
-  accounts: Array<{ name: string; balance: number; kind: string }>;
+  accounts: Array<{ name: string; balance: number; kind: string; accountType?: string }>;
   loans: Array<{ name: string; remaining: number; type: string }>;
   bills: Array<{ name: string; remaining: number }>;
 }
@@ -29,7 +32,7 @@ export function personalQuestionTopic(message: string): PersonalTopic | null {
   if (/bills?|obligations?/i.test(message)) return 'bills';
   if (/wallets?|accounts?|balances?/i.test(message)) return 'accounts';
   if (/income|salary|allowance|earned|kita/i.test(message)) return 'income';
-  if (/spend|expenses?|gastos/i.test(message)) return 'spending';
+  if (/spend|spent|expenses?|gastos/i.test(message)) return 'spending';
   if (/afford|buy|bili/i.test(message)) return 'timeline';
   return null;
 }
@@ -65,7 +68,7 @@ export function readAdviceContext(value: unknown, now = Date.now()): AdviceConte
   const age = now - Date.parse(result.data.updatedAt);
   // Read-only planning assumptions survive reloads and pauses. Financial facts
   // are fetched again each turn; cancel/new topics explicitly reset context.
-  return age >= -60_000 ? result.data : null;
+  return age >= -60_000 && age <= 30 * 60_000 ? result.data : null;
 }
 
 export function statedPlanningAmount(message: string): number | null {
@@ -76,12 +79,12 @@ export function statedPlanningAmount(message: string): number | null {
 }
 
 function statedAllocation(message: string) {
-  const match = /(?<![\w.,-])(?:₱|php\s*|p\s*)?(\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*(?:(?:per|a|each|every|\/)\s*)?(month(?:ly)?|week(?:ly)?)\b/i.exec(message);
-  if (!match) return null;
-  const amount = statedPlanningAmount(match[1]);
-  const weekly = /^week/i.test(match[2]);
+  const match = statedRecurringAmount(message);
+  if (!match || !['monthly', 'weekly'].includes(match.frequency)) return null;
+  const amount = statedPlanningAmount(String(match.amount));
+  const weekly = match.frequency === 'weekly';
   const monthly = amount == null ? null : roundMoney(amount * (weekly ? WEEKS_PER_MONTH : 1));
-  return monthly != null && monthly <= MAX_AMOUNT ? { monthly, weekly: weekly ? amount! : undefined, start: match.index, end: match.index + match[0].length } : null;
+  return monthly != null && monthly <= MAX_AMOUNT ? { monthly, weekly: weekly ? amount! : undefined, start: match.start, end: match.end } : null;
 }
 
 function explicitPrice(message: string) {
@@ -99,7 +102,7 @@ function explicitPrice(message: string) {
 export function isExplicitFinancialAction(message: string) {
   // Saving "per month" is a planning assumption unless the user specifies an
   // account/goal/date for a contribution. It must not become a ledger entry.
-  if (statedAllocation(message) && !/\b(?:from|into|today|yesterday|record|log|transfer|paid|received)\b/i.test(message)) return false;
+  if (statedRecurringAmount(message) && !/\b(?:from|into|today|yesterday|record|log|transfer|paid|received)\b/i.test(message)) return false;
   return /^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:i\s+)?(?:log|record|add|transfer|move|pay|paid|save|saved|spent|bought|received|earned|borrowed|lent|owe|collected|undo|correct|nagastos|gumastos|natanggap|ilipat|bayaran)\b/i.test(message);
 }
 

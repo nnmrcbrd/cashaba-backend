@@ -13,7 +13,8 @@ if (process.env.NODE_ENV === 'production') {
 // Middlewares
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
+  credentials: true,
+  exposedHeaders: ['Retry-After', 'RateLimit-Limit', 'RateLimit-Remaining'],
 }));
 app.use(express.json({ limit: '5mb', verify: (req, _res, buffer) => { (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer); } }));
 app.use(cookieParser());
@@ -61,6 +62,7 @@ import notificationsRoutes from "./routes/notifications.routes.js";
 import recurringRoutes from "./routes/recurring.routes.js";
 import walletRoutes from "./routes/wallet.routes.js";
 import subscriptionRoutes from "./routes/subscription.routes.js";
+import knowledgeRoutes from './routes/knowledge.routes.js';
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -79,13 +81,17 @@ app.use("/api/notifications", notificationsRoutes);
 app.use("/api/transactions", recurringRoutes);
 app.use("/api/wallets", walletRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
+app.use('/api/admin/knowledge', knowledgeRoutes);
+
+import { requireProductAccess } from './middlewares/productAccess.middleware';
+import { TrialExpiredError } from './services/subscription';
 
 // GCash scan-image (inline route — no separate file needed)
 import { scanGCashImage } from "./controllers/gcashScan.controller.js";
 import { authenticate as _auth } from "./middlewares/auth.middleware.js";
 import { authorize as _authorize } from "./middlewares/rbac.middleware.js";
 import { rateLimit as _rateLimit } from './middlewares/rateLimit.middleware.js';
-app.post("/api/gcash/scan-image", _auth, _authorize(['USER']), _rateLimit({ windowMs: 60_000, max: 10 }), scanGCashImage);
+app.post("/api/gcash/scan-image", _auth, _authorize(['USER']), requireProductAccess, _rateLimit({ windowMs: 60_000, max: 10 }), scanGCashImage);
 
 app.use((_req: Request, res: Response) => {
   res.status(404).json({ message: 'Route not found' });
@@ -96,6 +102,7 @@ app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
     res.status(413).json({ message: 'Uploaded file must be 2 MB or smaller' });
     return;
   }
+  if (error instanceof TrialExpiredError) { res.status(error.status).json({ message: error.message, code: error.code, subscriptionUrl: '/subscription' }); return; }
   console.error('Unhandled request error:', error);
   res.status(500).json({ message: 'Internal server error' });
 });

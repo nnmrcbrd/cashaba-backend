@@ -4,7 +4,9 @@ import { prisma } from '@/lib/prisma';
 import { authorize } from '@/middlewares/rbac.middleware';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { cancelPayMongoSubscription, PayMongoError } from '@/services/paymongo';
+import { PayMongoError } from '@/services/paymongo';
+import { cancelCheckout, CheckoutError } from '@/services/subscriptionCheckout';
+import { withFinancialOperation } from '@/services/financialOperation';
 import writeXlsxFile, { type Cell, type SheetData } from 'write-excel-file/node';
 import { calculateSafeToSpend } from '@/utils/safeToSpend';
 
@@ -277,15 +279,13 @@ router.delete('/me', authenticate, authorize(['USER']), async (req: Request, res
     if (!user) return res.status(404).json({ message: 'Account not found' });
     if (confirmation !== 'DELETE') return res.status(400).json({ message: 'Type DELETE to confirm account deletion' });
     if (req.user!.authMethod !== 'GOOGLE' && !(await bcrypt.compare(password, user.password))) return res.status(400).json({ message: 'Password confirmation is incorrect' });
-    const subscription = user.subscription;
-    if (subscription?.provider === 'PAYMONGO' && subscription.providerSubscriptionId && subscription.status !== 'CANCELLED') {
-      // Preserve the account and billing reference if the provider cannot confirm cancellation.
-      await cancelPayMongoSubscription(subscription.providerSubscriptionId);
-      await prisma.subscription.update({ where: { id: subscription.id }, data: { plan: 'FREE', status: 'CANCELLED', cancelledAt: new Date() } });
-    }
-    await prisma.user.delete({ where: { id: user.id } });
+    await withFinancialOperation(user.id, async tx => {
+      await cancelCheckout(tx, user.id);
+      await tx.user.delete({ where: { id: user.id } });
+    });
     res.json({ message: 'Account and associated data permanently deleted' });
   } catch (error) {
+    if (error instanceof CheckoutError) return res.status(error.status).json({ message: error.message, code: error.code });
     if (error instanceof PayMongoError) return res.status(error.status).json({ message: 'Account deletion was stopped because PayMongo cancellation could not be confirmed. Your account and billing details are still available. Please try again or contact support.' });
     console.error('Delete account error:', error);
     res.status(500).json({ message: 'Account deletion could not be completed. Please try again.' });
@@ -307,7 +307,7 @@ router.get('/admin/manage-users', authenticate, authorize(['ADMIN']), async (req
         accountStatus: true,
         lastActiveAt: true,
         region: true,
-        subscription: { select: { plan: true, status: true, currentPeriodEnd: true } },
+        subscription: { select: { plan: true, status: true, currentPeriodEnd: true, provider: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -358,6 +358,7 @@ router.get('/admin/manage-users', authenticate, authorize(['ADMIN']), async (req
 
     res.json({
       users: mappedUsers,
+      subscriptionCheckedAt: now.toISOString(),
       metrics: {
         totalUsers: dbUsers.length,
         totalTransactions: txCount,
@@ -365,7 +366,7 @@ router.get('/admin/manage-users', authenticate, authorize(['ADMIN']), async (req
         activeUsers: dbUsers.filter((user) => user.accountStatus === 'ACTIVE' && user.lastActiveAt && user.lastActiveAt >= activeCutoff).length,
         newUsersThisWeek,
         weekTransactions,
-        plusSubscribers: dbUsers.filter(user => user.subscription?.plan === 'PLUS' && user.subscription.status === 'ACTIVE' && user.subscription.currentPeriodEnd > now).length,
+        plusSubscribers: dbUsers.filter(user => user.subscription && user.subscription.plan !== 'FREE' && user.subscription.status === 'ACTIVE' && user.subscription.currentPeriodEnd > now).length,
       },
       locationBreakdown: (() => {
         const grouped = Object.entries(dbUsers.reduce<Record<string, number>>((totals, user) => {
@@ -394,25 +395,20 @@ router.patch('/admin/users/:id/status', authenticate, authorize(['ADMIN']), asyn
   const target = await prisma.user.findUnique({ where: { id: targetId } });
   if (!target) return res.status(404).json({ message: 'User not found' });
   if (target.accountRole === 'ADMIN') return res.status(403).json({ message: 'Administrator accounts cannot be changed from user management.' });
-  if (parsed.data.status === 'SUSPENDED') {
-    const subscription = await prisma.subscription.findUnique({ where: { userId: targetId } });
-    if (subscription?.provider === 'PAYMONGO' && subscription.providerSubscriptionId && !['CANCELLED', 'EXPIRED'].includes(subscription.status)) {
-      try {
-        await cancelPayMongoSubscription(subscription.providerSubscriptionId);
-      } catch (error) {
-        if (error instanceof PayMongoError) return res.status(error.status).json({ message: 'Suspension stopped because the active PayMongo subscription could not be cancelled.' });
-        throw error;
-      }
-    }
+  try {
+    const updated = await withFinancialOperation(targetId, async (tx) => {
+      if (parsed.data.status === 'SUSPENDED') await cancelCheckout(tx, targetId);
+      const user = await tx.user.update({ where: { id: targetId }, data: { accountStatus: parsed.data.status }, select: { id: true, accountStatus: true } });
+      if (parsed.data.status === 'SUSPENDED') await tx.token.updateMany({ where: { userId: targetId, revokedAt: null }, data: { revokedAt: new Date() } });
+      await tx.adminAuditLog.create({ data: { actorId: req.user!.userId, action: 'USER_STATUS_CHANGED', targetType: 'User', targetId, metadata: { previousStatus: target.accountStatus, newStatus: parsed.data.status } } });
+      return user;
+    });
+    res.json(updated);
+  } catch (error) {
+    if (error instanceof CheckoutError) return res.status(error.status).json({ message: error.message, code: error.code });
+    if (error instanceof PayMongoError) return res.status(error.status).json({ message: 'Suspension stopped because PayMongo cancellation could not be confirmed.' });
+    throw error;
   }
-  const updated = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.update({ where: { id: targetId }, data: { accountStatus: parsed.data.status }, select: { id: true, accountStatus: true } });
-    if (parsed.data.status === 'SUSPENDED') await tx.token.updateMany({ where: { userId: targetId, revokedAt: null }, data: { revokedAt: new Date() } });
-    if (parsed.data.status === 'SUSPENDED') await tx.subscription.updateMany({ where: { userId: targetId, provider: 'PAYMONGO', status: { notIn: ['CANCELLED', 'EXPIRED'] } }, data: { plan: 'FREE', status: 'CANCELLED', cancelledAt: new Date(), cancelAtPeriodEnd: false } });
-    await tx.adminAuditLog.create({ data: { actorId: req.user!.userId, action: 'USER_STATUS_CHANGED', targetType: 'User', targetId, metadata: { previousStatus: target.accountStatus, newStatus: parsed.data.status } } });
-    return user;
-  });
-  res.json(updated);
 });
 
 router.post('/admin/users/:id/cancel-subscription', authenticate, authorize(['ADMIN']), async (req: Request, res: Response) => {
@@ -421,13 +417,13 @@ router.post('/admin/users/:id/cancel-subscription', authenticate, authorize(['AD
   if (!subscription) return res.status(404).json({ message: 'Subscription not found' });
   if (subscription.status === 'CANCELLED' || subscription.status === 'EXPIRED') return res.json({ cancelled: true, alreadyCancelled: true });
   try {
-    if (subscription.provider === 'PAYMONGO' && subscription.providerSubscriptionId) await cancelPayMongoSubscription(subscription.providerSubscriptionId);
-    await prisma.$transaction(async tx => {
-      await tx.subscription.update({ where: { id: subscription.id }, data: { plan: 'FREE', status: 'CANCELLED', cancelledAt: new Date(), cancelAtPeriodEnd: false } });
+    await withFinancialOperation(targetId, async tx => {
+      await cancelCheckout(tx, targetId);
       await tx.adminAuditLog.create({ data: { actorId: req.user!.userId, action: 'SUBSCRIPTION_CANCELLED', targetType: 'User', targetId, metadata: { provider: subscription.provider, providerSubscriptionId: subscription.providerSubscriptionId } } });
     });
     res.json({ cancelled: true });
   } catch (error) {
+    if (error instanceof CheckoutError) return res.status(error.status).json({ message: error.message, code: error.code });
     if (error instanceof PayMongoError) return res.status(error.status).json({ message: 'PayMongo cancellation could not be confirmed. The subscription remains available for a retry.' });
     throw error;
   }

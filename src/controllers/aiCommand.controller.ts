@@ -1,7 +1,6 @@
 import { isFinancialDate, businessDateLabel } from "@/utils/calendar";
 import { aliasFinancialContext, safeQualitativeReply, isAdviceBoundaryRequest, ADVICE_BOUNDARY_REPLY } from "@/utils/aiSafety";
 import { Request, Response } from "express";
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { calculateSafeToSpend, calculateSafeToSpendInTransaction } from "@/utils/safeToSpend";
@@ -14,6 +13,9 @@ import { loadAdviceFacts } from '@/services/personalFinanceAdvice';
 import { personalAdviceTurn, recoverAdviceContext, statedPlanningAmount, transactionExplanation, isExplicitFinancialAction, conversationFollowUp, type AdviceContext } from '@/utils/personalFinanceAdvice';
 import { isCoreQuestion, readCoreContext, type CoreContext } from '@/utils/coreConversation';
 import { answerCoreQuestion } from '@/services/coreConversation';
+import { answerFinancialPlan } from '@/services/financialPlanner';
+import type { PlanningContext } from '@/utils/financialPlanner';
+import { aiLimits, boundedHistory, generateBounded } from '@/services/aiRuntime';
 
 const EXPENSE_CATEGORIES = ["Food & Dining", "Transport", "Utilities", "Housing", "Health", "Entertainment", "Education", "Shopping", "Bills", "Debt Payment", "Others"] as const;
 const INCOME_CATEGORIES = ["Salary", "Allowance", "Freelance", "Business", "Gift", "Other Income"] as const;
@@ -231,12 +233,11 @@ async function parseCommand(message: string, financialContext: string, draft?: F
   if (!process.env.GEMINI_API_KEY) return { command: localFallback(message), model: "local-fallback", usage: { prompt: 0, response: 0, total: 0 } };
   try {
     const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const local = localFallback(message);
     const aliases = aliasFinancialContext(financialContext, local.personName ? [local.personName] : []);
-    const response = await ai.models.generateContent({
+    const response = await generateBounded({
       model,
-      contents: aliases.sanitize(JSON.stringify({ latestMessage: message, savedActionDraft: draft ?? null, recentConversation: history.flatMap(turn => [{ role: 'user', content: turn.question.slice(0, 1000) }, { role: 'assistant', content: turn.answer.slice(0, 700) }]) })),
+      contents: aliases.sanitize(JSON.stringify({ latestMessage: message, savedActionDraft: draft ?? null, recentConversation: boundedHistory(history) })),
       config: {
         systemInstruction: `You are Casha-Ba, a careful personal-finance assistant for Filipino users. Return one JSON command using these intents: ${INTENTS.join(", ")}.
 
@@ -249,7 +250,6 @@ Use SUMMARY for requests for a financial brief, totals, or Safe-to-Spend. Use GE
 Verified financial context:
 ${aliases.sanitize(financialContext)}`,
         responseMimeType: "application/json",
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
         maxOutputTokens: 1024,
       },
     });
@@ -370,13 +370,14 @@ export async function confirmAiAction(userId: string, confirmationId: string) {
   }, { key: 'ai:' + confirmationId, payload: { confirmationId } });
 }
 
-async function saveTurn(userId: string, question: string, answer: string, model: string, usage: { prompt: number; response: number; total: number }, state: "COMPLETED" | "NEEDS_CLARIFICATION" | "AWAITING_CONFIRMATION" | "CANCELLED" = "COMPLETED", pendingAction?: FinancialCommand | AdviceContext | CoreContext | null, previousId?: string) {
+async function saveTurn(userId: string, question: string, answer: string, model: string, usage: { prompt: number; response: number; total: number }, state: "COMPLETED" | "NEEDS_CLARIFICATION" | "AWAITING_CONFIRMATION" | "CANCELLED" = "COMPLETED", pendingAction?: FinancialCommand | AdviceContext | CoreContext | PlanningContext | null, previousId?: string, contextMetadata?: unknown) {
   return withFinancialOperation(userId, async tx => {
     if (previousId) {
       const result = await tx.aiSession.updateMany({ where: { id: previousId, userId, state: 'NEEDS_CLARIFICATION' }, data: { state: 'COMPLETED' } });
       if (!result.count) throw new FinancialError('This draft has changed. Refresh the conversation and try again.', 409);
     }
-    return tx.aiSession.create({ data: { userId, question, answer, model, promptTokens: usage.prompt, responseTokens: usage.response, totalTokens: usage.total, state, pendingAction: pendingAction ? JSON.parse(JSON.stringify(pendingAction)) : undefined } });
+    return tx.aiSession.create({ data: { userId, question, answer, model, promptTokens: usage.prompt, responseTokens: usage.response, totalTokens: usage.total, state, pendingAction: pendingAction ? JSON.parse(JSON.stringify(pendingAction)) : undefined,
+      contextMetadata: contextMetadata ? JSON.parse(JSON.stringify(contextMetadata)) : undefined } });
   });
 }
 
@@ -384,7 +385,8 @@ export const processAiChat = async (req: Request, res: Response) => {
   const userId = req.user!.userId;
   let chargedUsagePeriodId: string | null = null;
   const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
-  if (!message || message.length > 1000) return res.status(400).json({ message: "Message must contain between 1 and 1000 characters" });
+  if (!message || message.length > aiLimits().question) return res.status(400).json({ message: `Message must contain between 1 and ${aiLimits().question} characters` });
+  if (JSON.stringify(req.body).length > aiLimits().request) return res.status(400).json({ message: 'Chat request is too large' });
   try {
     const confirmationId = typeof req.body.confirmationId === 'string' ? req.body.confirmationId : null;
     if (/^(confirm|yes|save|do it)$/i.test(message)) {
@@ -415,10 +417,13 @@ export const processAiChat = async (req: Request, res: Response) => {
         const history = (await prisma.aiSession.findMany({ where: { userId, question: { not: { startsWith: '__DASHBOARD_INSIGHTS__:' } } }, orderBy: { createdAt: 'desc' }, take: 8 })).reverse();
         const facts = await loadAdviceFacts(userId);
         const simple = conversationFollowUp(message) === 'simple';
-        const answer = explanation || simple ? { content: explanation || 'This is a preview of the entry you asked me to record. No money or records have changed yet. Choose Confirm and save only if the details below are correct.', model: 'local-finance-explanation-v2', usage: { prompt: 0, response: 0, total: 0 }, context: null } : isAdviceBoundaryRequest(message) ? { content: ADVICE_BOUNDARY_REPLY, model: 'local-policy-v1', usage: { prompt: 0, response: 0, total: 0 }, context: null } : await answerCoreQuestion(message, facts, history, readCoreContext(history.at(-1)?.pendingAction));
+        const answer = explanation || simple ? { content: explanation || 'This is a preview of the entry you asked me to record. No money or records have changed yet. Choose Confirm and save only if the details below are correct.', model: 'local-finance-explanation-v2', usage: { prompt: 0, response: 0, total: 0 }, context: null } : isAdviceBoundaryRequest(message) ? { content: ADVICE_BOUNDARY_REPLY, model: 'local-policy-v1', usage: { prompt: 0, response: 0, total: 0 }, context: null } : await answerFinancialPlan(message, facts, userId, history) ?? await answerCoreQuestion(message, facts, history, readCoreContext(history.at(-1)?.pendingAction));
         const content = `${answer.content}\n\nYour action is still awaiting confirmation:\n${pending.answer}`;
-        await saveTurn(userId, message, content, answer.model, answer.usage, 'COMPLETED', answer.context);
-        return res.json({ id: pending.id, role: 'assistant', content, timestamp: new Date(), requiresConfirmation: true, model: answer.model });
+        const knowledgeSources = 'sources' in answer ? answer.sources : [];
+        const retrieval = 'retrieval' in answer ? answer.retrieval : null;
+        await saveTurn(userId, message, content, answer.model, answer.usage, 'COMPLETED', answer.context, undefined,
+          { knowledgeSources, retrieval, asOf: facts.planning?.asOf });
+        return res.json({ id: pending.id, role: 'assistant', content, timestamp: new Date(), requiresConfirmation: true, model: answer.model, knowledgeSources });
       }
       return res.json({ id: pending.id, role: 'assistant', content: pending.answer, timestamp: pending.createdAt, requiresConfirmation: true });
     }
@@ -444,6 +449,20 @@ export const processAiChat = async (req: Request, res: Response) => {
     const conversational = !isExplicitFinancialAction(message) && !/^(?:that|this|it)\s+should be\b|^(?:remove|cancel) my last\b/i.test(message) && (!financialDraft || isCoreQuestion(message));
     if (conversational && !summaryRequest) {
       const facts = await loadAdviceFacts(userId);
+      const planning = !financialDraft ? await answerFinancialPlan(message, facts, userId, history) : null;
+      if (planning) {
+        const session = await saveTurn(userId, message, planning.content, planning.model, planning.usage,
+          planning.requiresClarification ? 'NEEDS_CLARIFICATION' : 'COMPLETED', planning.context, pending?.id,
+          { knowledgeSources: planning.sources, retrieval: { mode: planning.retrieval.mode, errorCode: planning.retrieval.errorCode,
+            passages: planning.retrieval.passages.map(({ id, version, distance }) => ({ id, version, distance })) },
+            calculation: { operation: planning.result.operation, values: planning.result.values, asOf: facts.planning?.asOf } });
+        return res.json({ id: session.id, role: 'assistant', content: planning.content, timestamp: session.createdAt,
+          safeToSpend: facts.breakdown.safeToSpend, requiresClarification: planning.requiresClarification, model: planning.model,
+          clarificationType: planning.requiresClarification ? 'planning' : null, knowledgeSources: planning.sources,
+          calculation: { operation: planning.result.operation, tools: planning.result.tools, values: planning.result.values, missing: planning.result.missing, assumptions: planning.result.assumptions,
+            currency: 'PHP', timezone: 'Asia/Manila', asOf: facts.planning?.asOf,
+            period: { start: facts.breakdown.periodStart, end: facts.breakdown.periodEnd }, historyCoverage: { start: facts.planning?.historyStart, end: facts.planning?.historyEnd } } });
+      }
       const advice = !financialDraft ? personalAdviceTurn(message, facts, recoverAdviceContext(history, facts)) : null;
       if (advice && (advice.context || explanation)) {
         const session = await saveTurn(userId, message, advice.content, 'local-personal-finance-v3', { prompt: 0, response: 0, total: 0 }, advice.requiresClarification ? 'NEEDS_CLARIFICATION' : 'COMPLETED', advice.context, pending?.id);
@@ -455,8 +474,11 @@ export const processAiChat = async (req: Request, res: Response) => {
         const missing = financialDraft ? missingDetail(draft) : null;
         const walletOptions = missing?.includes('wallet') ? facts.accounts.map(account => account.name) : [];
         const content = `${answer.content}${missing ? `\n\nYour earlier entry is still a draft. ${missing}` : ''}`;
-        const session = await saveTurn(userId, message, content, answer.model, answer.usage, 'COMPLETED', answer.context, financialDraft ? undefined : pending?.id);
-        return res.json({ id: financialDraft ? pending!.id : session.id, role: 'assistant', content, timestamp: session.createdAt, safeToSpend: facts.breakdown.safeToSpend, requiresClarification: !!financialDraft, walletOptions, model: answer.model });
+        const knowledgeSources = 'sources' in answer ? answer.sources : [];
+        const retrieval = 'retrieval' in answer ? answer.retrieval : null;
+        const session = await saveTurn(userId, message, content, answer.model, answer.usage, 'COMPLETED', answer.context, financialDraft ? undefined : pending?.id,
+          { knowledgeSources, retrieval, asOf: facts.planning?.asOf });
+        return res.json({ id: financialDraft ? pending!.id : session.id, role: 'assistant', content, timestamp: session.createdAt, safeToSpend: facts.breakdown.safeToSpend, requiresClarification: !!financialDraft, walletOptions, model: answer.model, knowledgeSources });
       }
     }
     const bareAmount = statedPlanningAmount(message);
@@ -529,6 +551,7 @@ export const processAiChat = async (req: Request, res: Response) => {
         console.error('AI quota refund failed', refundError);
       }
     }
+    if (error instanceof UsageLimitError) return res.status(error.status).json({ message: error.message, code: 'USAGE_LIMIT_REACHED', metric: error.metric, limit: error.limit, resetAt: error.resetAt.toISOString() });
     console.error("AI command processing error", error instanceof Error ? error.name : "processing error");
     const code = error instanceof Error ? error.message : "";
     const messages: Record<string, string> = {
@@ -539,7 +562,6 @@ export const processAiChat = async (req: Request, res: Response) => {
     };
     if (error instanceof LoanRepaymentError) return res.status(error.status).json({ message: error.message });
     if (error instanceof FinancialError) return res.status(error.status).json({ message: error.message });
-    if (error instanceof UsageLimitError) return res.status(error.status).json({ message: error.message, code: 'USAGE_LIMIT_REACHED', metric: error.metric, limit: error.limit });
     res.status(messages[code] ? 400 : 500).json({ message: messages[code] || "Error processing AI chat" });
   }
 };
@@ -550,7 +572,10 @@ export const getAiHistory = async (req: Request, res: Response) => {
     const history = await prisma.aiSession.findMany({ where: { userId: req.user!.userId, question: { not: { startsWith: '__DASHBOARD_INSIGHTS__:' } } }, orderBy: { createdAt: "desc" }, take: limit });
     const wallets = await prisma.wallet.findMany({ where: { userId: req.user!.userId }, select: { name: true } });
     res.json(history.reverse().map(turn => ({ ...turn,
+      knowledgeSources: turn.contextMetadata && typeof turn.contextMetadata === 'object' && !Array.isArray(turn.contextMetadata) ? turn.contextMetadata.knowledgeSources ?? [] : [],
       question: turn.question.split('. Additional detail: ').at(-1),
+      clarificationType: turn.state === 'NEEDS_CLARIFICATION' && turn.pendingAction && typeof turn.pendingAction === 'object'
+        && !Array.isArray(turn.pendingAction) && turn.pendingAction.kind === 'FINANCIAL_PLAN_V1' ? 'planning' : null,
       walletOptions: turn.state === 'NEEDS_CLARIFICATION' && turn.answer.includes('wallet') ? wallets.map(wallet => wallet.name) : [],
     })));
   } catch {

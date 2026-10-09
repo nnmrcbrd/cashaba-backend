@@ -3,6 +3,7 @@ import type { FinancialTx } from '@/services/financialOperation';
 import { money, roundMoney, WEEKS_PER_MONTH } from '@/utils/money';
 import { businessDate, businessMidnight } from './calendar';
 import { occurrencesBefore } from '@/utils/recurrence';
+import { billAmountSchedule, billScheduledTotal } from '@/utils/billAmounts';
 
 export interface SafeToSpendBreakdown {
   configuredIncome: number; actualIncome: number; totalIncome: number; totalFixed: number;
@@ -24,9 +25,12 @@ export function periodRange(period: string, now = new Date()) {
   }
   return { start: businessMidnight(year, month), end: businessMidnight(year, month + 1) };
 }
-export function scheduledReserve(input: { amount: number; paid: number; due: Date | null; anchor?: Date | null; frequency: string; end: Date; remaining?: number }) {
+export function scheduledReserve(input: { amount: number; paid: number; due: Date | null; anchor?: Date | null; frequency: string; end: Date; remaining?: number; amountSchedule?: unknown }) {
   const count = input.due ? input.frequency === 'ONE_TIME' ? Number(input.due < input.end) : Math.max(0, occurrencesBefore(input.anchor ?? input.due, input.frequency, input.end) - occurrencesBefore(input.anchor ?? input.due, input.frequency, input.due)) : 1;
-  return roundMoney(Math.min(input.remaining ?? Infinity, Math.max(0, count * input.amount - input.paid)));
+  const first = input.due && input.frequency !== 'ONE_TIME' ? occurrencesBefore(input.anchor ?? input.due, input.frequency, input.due) : 0;
+  const total = input.amountSchedule && input.frequency !== 'ONE_TIME'
+    ? billScheduledTotal(billAmountSchedule(input.amountSchedule, input.amount), first, count) : count * input.amount;
+  return roundMoney(Math.min(input.remaining ?? Infinity, Math.max(0, total - input.paid)));
 }
 export function savingsReserve(goals: Array<{ id: string; currentAmount: unknown; targetAmount: unknown; monthlyAllocation: unknown; isCompleted: boolean }>, movements: Array<{ type: string; amount: unknown; savingsGoalId: string | null }>, period: string) {
   const net = new Map<string, number>();
@@ -52,7 +56,7 @@ export async function calculateSafeToSpendInTransaction(tx: FinancialTx, userId:
   const [bills, goals, movements, loans] = await Promise.all([
     tx.fixedExpense.findMany({ where: { userId, status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] }, OR: [{ dueDate: { lt: end } }, { dueDate: null }] } }),
     tx.savingsGoal.findMany({ where: { userId } }),
-    tx.transaction.findMany({ where: { userId, deletedAt: null, date: { gte: start, lt: end } }, select: { type: true, amount: true, savingsGoalId: true } }),
+    tx.transaction.findMany({ where: { userId, deletedAt: null, date: { gte: start, lt: end, lte: now } }, select: { type: true, amount: true, savingsGoalId: true } }),
     tx.loan.findMany({ where: { userId, type: 'BORROWED', status: { in: ['ACTIVE', 'OVERDUE'] }, deadline: { lt: end } } }),
   ]);
   const totals = new Map<string, number>();
@@ -60,7 +64,7 @@ export async function calculateSafeToSpendInTransaction(tx: FinancialTx, userId:
   const actualIncome = totals.get('INCOME') ?? 0;
   const configuredIncome = money(setup?.totalIncome);
   const totalIncome = effectivePeriodIncome(configuredIncome, actualIncome);
-  const totalFixed = roundMoney(bills.reduce((sum, bill) => sum + scheduledReserve({ amount: money(bill.amount), paid: money(bill.amountPaid), due: bill.dueDate, anchor: bill.scheduleAnchor, frequency: bill.frequency, end }), 0));
+  const totalFixed = roundMoney(bills.reduce((sum, bill) => sum + scheduledReserve({ amount: money(bill.amount), paid: money(bill.amountPaid), due: bill.dueDate, anchor: bill.scheduleAnchor, frequency: bill.frequency, end, amountSchedule: bill.amountSchedule }), 0));
   const totalLoanRepayments = roundMoney(loans.reduce((sum, loan) => sum + scheduledReserve({ amount: money(loan.repaymentAmount) || money(loan.amount), paid: money(loan.installmentPaid), due: loan.deadline, anchor: loan.scheduleAnchor, frequency: loan.repaymentFrequency, end, remaining: Math.max(0, money(loan.amount) - money(loan.amountPaid)) }), 0));
   const totalSavings = savingsReserve(goals, movements, setup?.incomePeriod ?? 'monthly');
   const totalExpenses = roundMoney(['EXPENSE', 'BILL_PAYMENT', 'DEBT_PAYMENT'].reduce((sum, type) => sum + (totals.get(type) ?? 0), 0));

@@ -14,7 +14,7 @@ export function readCoreContext(value: unknown, now = Date.now()): CoreContext |
   const parsed = contextSchema.safeParse(value);
   if (!parsed.success) return null;
   const age = now - Date.parse(parsed.data.updatedAt);
-  return age >= -60_000 ? parsed.data : null;
+  return age >= -60_000 && age <= 30 * 60_000 ? parsed.data : null;
 }
 
 // Product facts are maintained alongside the routes. They describe existing

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSubscription, createTestPlusCheckout, verifiedTestPayment, type PayMongoCheckout } from './paymongo';
+import { createSubscription, createTestPlusCheckout, createTestPlanCheckout, createPaidPlan, verifiedTestPayment, type PayMongoCheckout } from './paymongo';
+import { PLAN_CATALOG } from '@/utils/subscriptionPolicy';
 
 test('a new subscription after cancellation gets a new provider retry key', async () => {
   const originalFetch = globalThis.fetch;
@@ -71,4 +72,31 @@ test('Plus fulfillment requires an owned, correctly priced, paid TEST payment', 
   assert.equal(verifiedTestPayment(checkout, 'owner'), null);
   checkout.attributes.line_items[0]!.currency = 'USD';
   assert.throws(() => verifiedTestPayment(checkout, 'owner'), /amount does not match/);
+});
+
+test('every tier sends its own amount, metadata and provider retry key and rejects mismatched payments', async t => {
+  const env = { key: process.env.PAYMONGO_SECRET_KEY, mode: process.env.BILLING_MODE };
+  process.env.PAYMONGO_SECRET_KEY = 'sk_test_example'; process.env.BILLING_MODE = 'paymongo_test';
+  t.after(() => {
+    if (env.key === undefined) delete process.env.PAYMONGO_SECRET_KEY; else process.env.PAYMONGO_SECRET_KEY = env.key;
+    if (env.mode === undefined) delete process.env.BILLING_MODE; else process.env.BILLING_MODE = env.mode;
+  });
+  const keys = new Set<string>();
+  t.mock.method(globalThis, 'fetch', async (_url: string | URL | Request, init?: RequestInit) => {
+    const attrs = JSON.parse(String(init?.body)).data.attributes;
+    keys.add(new Headers(init?.headers).get('Idempotency-Key')!);
+    assert.equal(attrs.line_items?.[0]?.amount ?? attrs.amount, PLAN_CATALOG[attrs.metadata.plan as keyof typeof PLAN_CATALOG].priceCents);
+    return Response.json({ data: { id: 'test', type: 'checkout_session', attributes: { ...attrs, livemode: false, status: 'active', checkout_url: 'https://checkout.paymongo.com/test' } } });
+  });
+  for (const plan of ['BASIC', 'STANDARD', 'PREMIUM'] as const) {
+    const checkout = await createTestPlanCheckout({ userId: 'owner', attempt: 'first', plan });
+    await createPaidPlan('monthly', plan);
+    const amount = PLAN_CATALOG[plan].priceCents;
+    checkout.attributes.payments = [{ id: 'paid', type: 'payment', attributes: { status: 'paid', amount, currency: 'PHP', livemode: false } }];
+    assert.equal(verifiedTestPayment(checkout, 'owner', plan, amount)?.id, 'paid');
+    assert.throws(() => verifiedTestPayment(checkout, 'owner', plan, amount - 100), /amount does not match/);
+    checkout.attributes.metadata!.plan = plan === 'BASIC' ? 'PREMIUM' : 'BASIC';
+    assert.throws(() => verifiedTestPayment(checkout, 'owner', plan, amount), /does not belong/);
+  }
+  assert.equal(keys.size, 6, 'each tier and endpoint uses a distinct key');
 });

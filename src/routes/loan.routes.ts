@@ -1,3 +1,4 @@
+import { requireProductAccess } from '@/middlewares/productAccess.middleware';
 import { Router } from "express";
 import {
   getLoans,
@@ -11,7 +12,7 @@ import { authorize } from "@/middlewares/rbac.middleware";
 
 const router = Router();
 
-router.use(authenticate, authorize(["USER"]));
+router.use(authenticate, authorize(["USER"]), requireProductAccess);
 
 router.get("/", getLoans);
 router.post("/", createLoan);

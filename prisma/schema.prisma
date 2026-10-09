@@ -37,6 +37,7 @@ model User {
   localCredentialVerified Boolean              @default(false) @map("local_credential_verified")
   googleSubject           String?              @unique @map("google_subject")
   sessionVersion          Int                  @default(0) @map("session_version")
+  trialStartedAt          DateTime             @default(now()) @map("trial_started_at")
   adminAuditLogs          AdminAuditLog[]      @relation("AdminActor")
   aiSessions              AiSession[]
   budgets                 Budget[]
@@ -68,6 +69,8 @@ model Subscription {
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
   providerPlanId         String?            @map("provider_plan_id")
+  requestedPlan          SubscriptionPlan?  @map("requested_plan")
+  checkoutAmountCents    Int?               @map("checkout_amount_cents")
   user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
@@ -227,10 +230,43 @@ model AiSession {
   createdAt      DateTime       @default(now())
   userId         String
   pendingAction  Json?          @map("pending_action")
+  contextMetadata Json?         @map("context_metadata")
   state          AiSessionState @default(COMPLETED)
   user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model KnowledgeBase {
+  id               String   @id @default(uuid())
+  question         String   @unique
+  answer           String   @db.Text
+  category         String?
+  tags             String[]
+  metadata         Json?
+  embedding        Unsupported("vector(768)")?
+  embeddingVersion String?
+  contentHash      String
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([category])
+}
+
+model KnowledgeDocument {
+  id               String   @id @default(uuid())
+  slug             String   @unique
+  title            String
+  content          String   @db.Text
+  excerpt          String
+  category         String[]
+  embedding        Unsupported("vector(768)")?
+  embeddingVersion String?
+  contentHash      String
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 model IncomeSetup {
@@ -258,6 +294,7 @@ model FixedExpense {
   updatedAt      DateTime            @updatedAt
   walletId       String?             @map("wallet_id")
   scheduleAnchor DateTime?           @map("schedule_anchor")
+  amountSchedule Json                @default("[]") @map("amount_schedule")
   user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet         Wallet?             @relation(fields: [walletId], references: [id])
   transactions   Transaction[]
@@ -328,6 +365,9 @@ enum TransactionType {
 enum SubscriptionPlan {
   FREE
   PLUS
+  BASIC
+  STANDARD
+  PREMIUM
 }
 
 enum SubscriptionStatus {

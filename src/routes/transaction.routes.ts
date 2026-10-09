@@ -1,3 +1,4 @@
+import { requireProductAccess } from '@/middlewares/productAccess.middleware';
 import { Router } from "express";
 import {
     getTransactions,
@@ -19,7 +20,7 @@ const upload = multer({
 
 const router = Router();
 
-router.use(authenticate, authorize(["USER"]));
+router.use(authenticate, authorize(["USER"]), requireProductAccess);
 
 router.get("/", getTransactions);
 router.post("/", createTransaction);

@@ -2,9 +2,11 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma, qualifiedTable } from '@/lib/prisma';
 import { getSubscriptionSummary, monthlyPeriod } from '@/services/subscription';
-import { cancelPayMongoSubscription, createCustomer, createPlusPlan, createSubscription, PayMongoError, verifyPayMongoSignature } from '@/services/paymongo';
+import { assertPayMongoConfigured, createCustomer, createPaidPlan, createSubscription, retrievePayMongoSubscription, PayMongoError, verifyPayMongoSignature } from '@/services/paymongo';
+import { PLAN_CATALOG, isPaidPlan } from '@/utils/subscriptionPolicy';
 import { startTestCheckout, syncTestCheckout } from '@/services/testCheckout';
-import { FinancialError, withFinancialOperation } from '@/services/financialOperation';
+import { FinancialError, requestOperation, withFinancialOperation } from '@/services/financialOperation';
+import { assertCheckoutNotProcessing, cancelCheckout, CheckoutError, closeCheckout, runSubscriptionCheckout } from '@/services/subscriptionCheckout';
 
 const payMongoEventSchema = z.object({
   data: z.object({
@@ -19,6 +21,9 @@ const payMongoEventSchema = z.object({
         attributes: z.object({
           customer_id: z.string().max(200).optional(),
           resource_id: z.string().max(200).optional(),
+          amount: z.number().int().positive().optional(),
+          currency: z.string().optional(),
+          subscription: z.object({ id: z.string(), plan: z.object({ id: z.string() }).passthrough().optional() }).passthrough().optional(),
           status: z.string().max(40),
           next_billing_schedule: z.string().optional().nullable(),
           cancelled_at: z.union([z.number(), z.string()]).optional().nullable(),
@@ -28,11 +33,16 @@ const payMongoEventSchema = z.object({
   }),
 });
 
-const startSubscriptionSchema = z.object({
+const planSelectionSchema = z.object({ plan: z.enum(['BASIC', 'STANDARD', 'PREMIUM']).default('BASIC') });
+const startSubscriptionSchema = planSelectionSchema.extend({
   phone: z.string().trim().regex(/^\+639\d{9}$/, 'Enter a Philippine mobile number in +639XXXXXXXXX format.'),
 });
 
 function handlePayMongoError(error: unknown, res: Response) {
+  if (error instanceof CheckoutError) {
+    res.status(error.status).json({ message: error.message, code: error.code });
+    return true;
+  }
   if (error instanceof PayMongoError) {
     res.status(error.status).json({ message: error.message, code: error.code });
     return true;
@@ -62,7 +72,9 @@ export async function getMySubscription(req: Request, res: Response) {
 
 export async function startPayMongoTestCheckout(req: Request, res: Response) {
   try {
-    const checkout = await startTestCheckout(req.user!.userId);
+    const input = planSelectionSchema.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json({ message: 'Choose Basic, Standard or Premium.' });
+    const checkout = await startTestCheckout(req.user!.userId, input.data.plan, req.get('Idempotency-Key'));
     res.status(201).json({ checkoutUrl: checkout.attributes.checkout_url, testMode: true, subscription: await getSubscriptionSummary(req.user!.userId) });
   } catch (error) {
     if (!handlePayMongoError(error, res)) {
@@ -84,23 +96,33 @@ export async function startPayMongoSubscription(req: Request, res: Response) {
     if ((process.env.BILLING_MODE ?? 'demo') !== 'paymongo') return res.status(503).json({ message: 'PayMongo payment collection is pending provider activation.' });
     const input = startSubscriptionSchema.safeParse(req.body);
     if (!input.success) return res.status(400).json({ message: input.error.issues[0]?.message || 'A valid mobile number is required.' });
+    assertPayMongoConfigured();
     const userId = req.user!.userId;
-    const [user, existing, reusablePlan] = await Promise.all([
-      prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { id: true, firstName: true, lastName: true, email: true } }),
-      prisma.subscription.findUnique({ where: { userId } }),
-      prisma.subscription.findFirst({ where: { provider: 'PAYMONGO', providerPlanId: { not: null } }, select: { providerPlanId: true } }),
-    ]);
-    if (existing?.plan === 'PLUS' && existing.status === 'ACTIVE' && existing.currentPeriodEnd > new Date()) return res.status(409).json({ message: 'Casha-Ba Plus is already active.' });
-    if (existing?.provider === 'PAYMONGO' && existing.providerSubscriptionId && !['CANCELLED', 'EXPIRED'].includes(existing.status)) return res.status(409).json({ message: 'An earlier PayMongo subscription still needs to be cancelled before starting a new checkout.' });
-
-    const customerId = existing?.providerCustomerId || (await createCustomer(user, input.data.phone)).id;
-    const planId = existing?.providerPlanId || reusablePlan?.providerPlanId || (await createPlusPlan('casha-ba-plus-monthly-99')).id;
-    const remote = await createSubscription({ userId, customerId, planId, previousSubscriptionId: existing?.provider === 'PAYMONGO' ? existing.providerSubscriptionId : null });
-    const period = monthlyPeriod();
-    await prisma.subscription.upsert({
+    const selectedPlan = input.data.plan;
+    const amountCents = PLAN_CATALOG[selectedPlan].priceCents;
+    const remote = await runSubscriptionCheckout({ userId, key: req.get('Idempotency-Key'), provider: 'PAYMONGO', plan: selectedPlan, phone: input.data.phone,
+      create: async (attemptId, existing) => {
+        if (existing?.provider === 'PAYMONGO' && existing.status === 'ACTIVE' && existing.providerSubscriptionId) {
+          return { ...await retrievePayMongoSubscription(existing.providerSubscriptionId), customerId: existing.providerCustomerId!, planId: existing.providerPlanId! };
+        }
+        const [user, reusablePlan] = await Promise.all([
+          prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { id: true, firstName: true, lastName: true, email: true } }),
+          prisma.subscription.findFirst({ where: { provider: 'PAYMONGO', providerPlanId: { not: null }, requestedPlan: selectedPlan, checkoutAmountCents: amountCents }, select: { providerPlanId: true } }),
+        ]);
+        const customerId = existing?.providerCustomerId || (await createCustomer(user, input.data.phone)).id;
+        const matchingExisting = existing?.requestedPlan === selectedPlan && existing.checkoutAmountCents === amountCents;
+        const planId = (matchingExisting ? existing?.providerPlanId : null) || reusablePlan?.providerPlanId || (await createPaidPlan(`casha-ba-${selectedPlan.toLowerCase()}-monthly`, selectedPlan)).id;
+        return { ...await createSubscription({ userId, customerId, planId, attemptId }), customerId, planId };
+      },
+      save: async (tx, result) => {
+        const { customerId, planId } = result;
+        const period = monthlyPeriod();
+        await tx.subscription.upsert({
       where: { userId },
-      create: { userId, plan: 'FREE', status: 'ACTIVE', provider: 'PAYMONGO', providerCustomerId: customerId, providerSubscriptionId: remote.id, providerPlanId: planId, currentPeriodStart: period.periodStart, currentPeriodEnd: period.periodEnd },
-      update: { plan: 'FREE', status: 'ACTIVE', provider: 'PAYMONGO', providerCustomerId: customerId, providerSubscriptionId: remote.id, providerPlanId: planId, currentPeriodStart: period.periodStart, currentPeriodEnd: period.periodEnd, cancelAtPeriodEnd: false, cancelledAt: null },
+      create: { userId, plan: 'FREE', requestedPlan: selectedPlan, checkoutAmountCents: amountCents, status: 'ACTIVE', provider: 'PAYMONGO', providerCustomerId: customerId, providerSubscriptionId: result.id, providerPlanId: planId, currentPeriodStart: period.periodStart, currentPeriodEnd: period.periodEnd },
+      update: { plan: 'FREE', requestedPlan: selectedPlan, checkoutAmountCents: amountCents, status: 'ACTIVE', provider: 'PAYMONGO', providerCustomerId: customerId, providerSubscriptionId: result.id, providerPlanId: planId, currentPeriodStart: period.periodStart, currentPeriodEnd: period.periodEnd, cancelAtPeriodEnd: false, cancelledAt: null },
+        });
+      },
     });
     res.status(201).json({
       subscription: await getSubscriptionSummary(userId),
@@ -115,36 +137,50 @@ export async function startPayMongoSubscription(req: Request, res: Response) {
 
 export async function activateDemoPlus(req: Request, res: Response) {
   if (process.env.NODE_ENV === 'production' || (process.env.BILLING_MODE ?? 'demo') !== 'demo') return res.status(404).json({ message: 'Demo billing is unavailable' });
-  const now = new Date(); const end = new Date(now); end.setUTCDate(end.getUTCDate() + 30);
-  await prisma.subscription.upsert({
-    where: { userId: req.user!.userId },
-    create: { userId: req.user!.userId, plan: 'PLUS', status: 'ACTIVE', provider: 'DEMO', currentPeriodStart: now, currentPeriodEnd: end },
-    update: { plan: 'PLUS', status: 'ACTIVE', provider: 'DEMO', currentPeriodStart: now, currentPeriodEnd: end, cancelAtPeriodEnd: false, cancelledAt: null },
-  });
-  res.json(await getSubscriptionSummary(req.user!.userId));
+  const input = planSelectionSchema.safeParse(req.body ?? {});
+  if (!input.success) return res.status(400).json({ message: 'Choose Basic, Standard or Premium.' });
+  const plan = input.data.plan;
+  try {
+    const now = new Date(); const end = new Date(now); end.setUTCDate(end.getUTCDate() + 30);
+    await withFinancialOperation(req.user!.userId, async tx => {
+      await assertCheckoutNotProcessing(tx, req.user!.userId);
+      const existing = await tx.subscription.findUnique({ where: { userId: req.user!.userId } });
+      if (existing && ['PAYMONGO', 'PAYMONGO_TEST'].includes(existing.provider) && existing.providerSubscriptionId && !['CANCELLED', 'EXPIRED'].includes(existing.status)) throw new CheckoutError('Continue or cancel your earlier checkout first.', 'CHECKOUT_ALREADY_PENDING');
+      await tx.subscription.upsert({
+        where: { userId: req.user!.userId },
+        create: { userId: req.user!.userId, plan, requestedPlan: plan, checkoutAmountCents: PLAN_CATALOG[plan].priceCents, status: 'ACTIVE', provider: 'DEMO', currentPeriodStart: now, currentPeriodEnd: end },
+        update: { plan, requestedPlan: plan, checkoutAmountCents: PLAN_CATALOG[plan].priceCents, status: 'ACTIVE', provider: 'DEMO', currentPeriodStart: now, currentPeriodEnd: end, cancelAtPeriodEnd: false, cancelledAt: null, providerSubscriptionId: null, providerPlanId: null, providerCustomerId: null },
+      });
+      return { activated: true };
+    }, requestOperation(req));
+    res.json(await getSubscriptionSummary(req.user!.userId));
+  } catch (error) {
+    if (handlePayMongoError(error, res)) return;
+    if (error instanceof FinancialError) return res.status(error.status).json({ message: error.message });
+    throw error;
+  }
 }
 
 export async function cancelSubscription(req: Request, res: Response) {
   try {
     const userId = req.user!.userId;
     const existing = await prisma.subscription.findUnique({ where: { userId } });
-    if (!existing || (existing.plan !== 'PLUS' && !(['PAYMONGO', 'PAYMONGO_TEST'].includes(existing.provider) && existing.providerSubscriptionId && !['CANCELLED', 'EXPIRED'].includes(existing.status)))) return res.status(409).json({ message: 'There is no active or pending Plus subscription to cancel' });
-    if (existing.provider === 'PAYMONGO' && existing.providerSubscriptionId) {
-      await cancelPayMongoSubscription(existing.providerSubscriptionId);
-      await prisma.subscription.update({ where: { userId }, data: { plan: 'FREE', status: 'CANCELLED', cancelAtPeriodEnd: false, cancelledAt: new Date() } });
-    } else if (existing.provider === 'PAYMONGO_TEST') {
+    if (!existing || (!isPaidPlan(existing.plan) && !(['PAYMONGO', 'PAYMONGO_TEST'].includes(existing.provider) && existing.providerSubscriptionId && !['CANCELLED', 'EXPIRED'].includes(existing.status)))) return res.status(409).json({ message: 'There is no active or pending subscription to cancel' });
+    if (['PAYMONGO', 'PAYMONGO_TEST'].includes(existing.provider)) {
       await withFinancialOperation(userId, async tx => {
+        await assertCheckoutNotProcessing(tx, userId);
         const current = await tx.subscription.findUnique({ where: { userId } });
         if (current?.provider !== existing.provider || current.providerSubscriptionId !== existing.providerSubscriptionId) throw new FinancialError('Your checkout changed. Refresh your plan before cancelling.', 409);
-        await tx.subscription.update({ where: { userId }, data: { plan: 'FREE', status: 'CANCELLED', cancelAtPeriodEnd: false, cancelledAt: new Date() } });
+        await cancelCheckout(tx, userId);
       });
     } else {
       await prisma.subscription.update({ where: { userId }, data: { plan: 'FREE', status: 'CANCELLED', cancelAtPeriodEnd: false, cancelledAt: new Date() } });
     }
     res.json(await getSubscriptionSummary(userId));
   } catch (error) {
+    if (handlePayMongoError(error, res)) return;
     if (error instanceof FinancialError) return res.status(error.status).json({ message: error.message });
-    if (!handlePayMongoError(error, res)) throw error;
+    throw error;
   }
 }
 
@@ -158,7 +194,7 @@ export async function billingWebhook(req: Request, res: Response) {
     return res.status(400).json({ message: 'Test-mode billing events cannot change a live subscription' });
   }
   const resource = event.attributes.data;
-  const providerSubscriptionId = resource.type === 'subscription' ? resource.id : resource.attributes.resource_id;
+  const providerSubscriptionId = resource.type === 'subscription' ? resource.id : resource.attributes.resource_id ?? resource.attributes.subscription?.id;
   if (!providerSubscriptionId) return res.status(400).json({ message: 'Subscription reference is missing' });
   if (await prisma.billingEvent.findUnique({ where: { providerEventId: event.id } })) return res.json({ received: true, duplicate: true });
 
@@ -166,12 +202,12 @@ export async function billingWebhook(req: Request, res: Response) {
   // A signed event for a replaced subscription must not retry or affect the new one.
   if (!local) return res.json({ received: true, ignored: 'Subscription is no longer current' });
   const eventType = event.attributes.type;
-  if (local.status === 'CANCELLED' && local.cancelledAt) {
-    await prisma.billingEvent.create({ data: { providerEventId: event.id, type: eventType, payload: req.body } });
-    return res.json({ received: true, ignored: 'Subscription was already cancelled' });
-  }
   const remoteStatus = resource.attributes.status;
   const active = eventType === 'subscription.invoice.paid' && resource.type === 'invoice' && remoteStatus === 'paid';
+  if (active && local.requestedPlan && (resource.attributes.amount !== local.checkoutAmountCents || resource.attributes.currency !== 'PHP' ||
+      (resource.attributes.subscription?.plan?.id && resource.attributes.subscription.plan.id !== local.providerPlanId))) {
+    return res.status(409).json({ message: 'The paid invoice does not match the selected plan and price.' });
+  }
   const pastDue = eventType === 'subscription.past_due' || eventType === 'subscription.invoice.payment_failed';
   const cancelled = eventType === 'subscription.unpaid' || remoteStatus === 'cancelled' || remoteStatus === 'unpaid';
   const status = active ? 'ACTIVE' : pastDue ? 'PAST_DUE' : cancelled ? 'CANCELLED' : local.status;
@@ -179,15 +215,25 @@ export async function billingWebhook(req: Request, res: Response) {
   const eventSeconds = event.attributes.created_at;
   const eventAt = eventSeconds ? new Date(eventSeconds * 1000) : null;
   const changesState = active || pastDue || cancelled;
-  let applied = false;
-  await prisma.$transaction(async tx => {
+  const outcome = await withFinancialOperation(local.userId, async tx => {
+    if (await tx.billingEvent.findUnique({ where: { providerEventId: event.id } })) return { received: true, duplicate: true };
+    const current = await tx.subscription.findUniqueOrThrow({ where: { id: local.id } });
+    if (current.providerSubscriptionId !== providerSubscriptionId || current.status === 'CANCELLED') {
+      await tx.billingEvent.create({ data: { providerEventId: event.id, type: eventType, payload: req.body } });
+      return { received: true, ignored: 'Subscription is no longer current or was cancelled' };
+    }
+    const invoiceMarker = `paymongo-paid-invoice:${resource.id}`;
+    if (active && await tx.billingEvent.findUnique({ where: { providerEventId: invoiceMarker } })) {
+      await tx.billingEvent.create({ data: { providerEventId: event.id, type: eventType, payload: req.body } });
+      return { received: true, duplicate: true };
+    }
+    let applied = false;
     if (changesState && eventAt && !Number.isNaN(eventAt.getTime())) {
-      await tx.$queryRawUnsafe(`SELECT "id" FROM ${qualifiedTable('Subscription')} WHERE "id" = $1 FOR UPDATE`, local.id);
-      const current = await tx.subscription.findUniqueOrThrow({ where: { id: local.id } });
       const earlier = await tx.$queryRawUnsafe<Array<{ payload: unknown; type: string }>>(
         `SELECT "payload", "type" FROM ${qualifiedTable('BillingEvent')}
          WHERE "payload" #>> '{data,attributes,data,id}' = $1
-            OR "payload" #>> '{data,attributes,data,attributes,resource_id}' = $1`, providerSubscriptionId,
+            OR "payload" #>> '{data,attributes,data,attributes,resource_id}' = $1
+            OR "payload" #>> '{data,attributes,data,attributes,subscription,id}' = $1`, providerSubscriptionId,
       );
       const latestStateEvent = earlier.reduce((latest, row) => {
         const prior = row.payload as { data?: { attributes?: { created_at?: number; data?: { type?: string; attributes?: { status?: string } } } } };
@@ -197,21 +243,24 @@ export async function billingWebhook(req: Request, res: Response) {
           ['subscription.past_due', 'subscription.invoice.payment_failed', 'subscription.unpaid'].includes(row.type) || ['cancelled', 'unpaid'].includes(priorStatus ?? '');
         return stateEvent && typeof timestamp === 'number' ? Math.max(latest, timestamp) : latest;
       }, 0);
-      if (current.providerSubscriptionId === providerSubscriptionId && current.status !== 'CANCELLED' && eventSeconds! > latestStateEvent) {
+      if (eventSeconds! > latestStateEvent) {
         await tx.subscription.update({
           where: { id: local.id },
           data: {
-            plan: active ? 'PLUS' : cancelled ? 'FREE' : current.plan,
+            plan: active ? (isPaidPlan(current.requestedPlan) ? current.requestedPlan : 'PLUS') : cancelled ? 'FREE' : current.plan,
             status,
             currentPeriodStart: active ? period.periodStart : current.currentPeriodStart,
             currentPeriodEnd: active ? period.periodEnd : current.currentPeriodEnd,
             cancelledAt: cancelled ? new Date() : current.cancelledAt,
           },
         });
+        if (active) await tx.billingEvent.create({ data: { providerEventId: invoiceMarker, type: 'subscription.invoice.fulfilled', payload: { invoiceId: resource.id, subscriptionId: providerSubscriptionId } } });
+        if (active || cancelled) await closeCheckout(tx, local.userId);
         applied = true;
       }
     }
     await tx.billingEvent.create({ data: { providerEventId: event.id, type: eventType, payload: req.body } });
+    return { received: true, applied };
   });
-  res.json({ received: true, applied });
+  res.json(outcome);
 }

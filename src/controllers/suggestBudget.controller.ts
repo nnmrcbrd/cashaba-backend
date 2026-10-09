@@ -13,7 +13,7 @@ export const suggestBudget = async (req: Request, res: Response) => {
   try {
     const subscription = await getSubscriptionSummary(req.user!.userId);
     const apiKey = process.env.GEMINI_API_KEY;
-    if (subscription.plan === 'PLUS' && apiKey && apiKey !== 'dummy_gemini_api_key_here') {
+    if (subscription.plan !== 'FREE' && apiKey && apiKey !== 'dummy_gemini_api_key_here') {
       try {
         usageId = (await consumeUsage(req.user!.userId, 'aiRequests')).id;
         const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-3.6-flash' });

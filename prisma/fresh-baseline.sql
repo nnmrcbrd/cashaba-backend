@@ -8,7 +8,7 @@ CREATE TYPE "AccountRole" AS ENUM ('USER', 'ADMIN');
 CREATE TYPE "TransactionType" AS ENUM ('INCOME', 'EXPENSE', 'TRANSFER', 'ADJUSTMENT', 'SAVINGS_CONTRIBUTION', 'SAVINGS_WITHDRAWAL', 'BILL_PAYMENT', 'DEBT_PAYMENT', 'LOAN_COLLECTION', 'LOAN_PROCEEDS', 'LOAN_DISBURSEMENT');
 
 -- CreateEnum
-CREATE TYPE "SubscriptionPlan" AS ENUM ('FREE', 'PLUS');
+CREATE TYPE "SubscriptionPlan" AS ENUM ('FREE', 'PLUS', 'BASIC', 'STANDARD', 'PREMIUM');
 
 -- CreateEnum
 CREATE TYPE "SubscriptionStatus" AS ENUM ('ACTIVE', 'PAST_DUE', 'CANCELLED', 'EXPIRED');
@@ -58,6 +58,7 @@ CREATE TABLE "User" (
     "local_credential_verified" BOOLEAN NOT NULL DEFAULT false,
     "google_subject" TEXT,
     "session_version" INTEGER NOT NULL DEFAULT 0,
+    "trial_started_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -74,6 +75,8 @@ CREATE TABLE "Subscription" (
     "provider_customer_id" TEXT,
     "provider_subscription_id" TEXT,
     "provider_plan_id" TEXT,
+    "requested_plan" "SubscriptionPlan",
+    "checkout_amount_cents" INTEGER,
     "current_period_start" TIMESTAMP(3) NOT NULL,
     "current_period_end" TIMESTAMP(3) NOT NULL,
     "cancel_at_period_end" BOOLEAN NOT NULL DEFAULT false,
@@ -254,6 +257,7 @@ CREATE TABLE "FixedExpense" (
     "amount_paid" DECIMAL(14,2) NOT NULL DEFAULT 0,
     "due_date" TIMESTAMP(3),
     "schedule_anchor" TIMESTAMP(3),
+    "amount_schedule" JSONB NOT NULL DEFAULT '[]',
     "frequency" "ObligationFrequency" NOT NULL DEFAULT 'MONTHLY',
     "status" "ObligationStatus" NOT NULL DEFAULT 'PENDING',
     "category" TEXT NOT NULL DEFAULT 'Bills',

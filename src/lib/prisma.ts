@@ -14,7 +14,7 @@ const connectionString = testSchema ? process.env.TEST_DATABASE_URL! : `${proces
 const adapter = new PrismaPg({ connectionString }, { schema: testSchema || 'public' });
 const prisma = new PrismaClient({ adapter });
 
-export function qualifiedTable(name: 'User' | 'Subscription' | 'BillingEvent' | 'RateLimitBucket') {
+export function qualifiedTable(name: 'User' | 'Subscription' | 'BillingEvent' | 'RateLimitBucket' | 'KnowledgeBase' | 'KnowledgeDocument') {
   return `"${testSchema || 'public'}"."${name}"`;
 }
 

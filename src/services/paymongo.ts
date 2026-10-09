@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { PLAN_CATALOG, type PaidPlan } from '@/utils/subscriptionPolicy';
 
 const API_URL = 'https://api.paymongo.com/v1';
 
@@ -22,6 +23,8 @@ function secretKey() {
   if (!key.startsWith('sk_test_') && !key.startsWith('sk_live_')) throw new PayMongoError('The configured PayMongo secret key is invalid.', 503, 'PAYMONGO_INVALID_KEY');
   return key;
 }
+
+export function assertPayMongoConfigured() { secretKey(); }
 
 async function request<T>(path: string, init: RequestInit = {}, version: 'v1' | 'v2' = 'v1'): Promise<T> {
   const response = await fetch(`${API_URL.replace('/v1', `/${version}`)}${path}`, {
@@ -72,21 +75,27 @@ export function validateTestCheckout(checkout: PayMongoCheckout) {
 }
 
 export async function createTestPlusCheckout(input: { userId: string; attempt: string }) {
+  return createTestPlanCheckout({ ...input, plan: 'PLUS' });
+}
+
+export async function createTestPlanCheckout(input: { userId: string; attempt: string; plan: PaidPlan }) {
   assertTestCheckoutConfigured();
+  const plan = PLAN_CATALOG[input.plan];
+  const name = input.plan === 'PLUS' ? 'Plus' : plan.name;
   const successUrl = new URL('/subscription', process.env.FRONTEND_URL || 'http://localhost:3000');
   successUrl.searchParams.set('payment', 'success');
   const cancelUrl = new URL(successUrl);
   cancelUrl.searchParams.set('payment', 'cancelled');
   const checkout = await request<PayMongoCheckout>('/checkout_sessions', {
     method: 'POST',
-    headers: { 'Idempotency-Key': idempotencyKey('test-checkout', `${input.userId}:${input.attempt}`) },
+    headers: { 'Idempotency-Key': idempotencyKey('test-checkout', `${input.userId}:${input.plan}:${plan.priceCents}:${input.attempt}`) },
     body: JSON.stringify({ data: { attributes: {
-      description: 'Casha-Ba Plus — 30 days (TEST PAYMENT ONLY)',
-      line_items: [{ name: 'Casha-Ba Plus — 30 days', amount: 9900, currency: 'PHP', quantity: 1 }],
+      description: `Casha-Ba ${name} — 30 days (TEST PAYMENT ONLY)`,
+      line_items: [{ name: `Casha-Ba ${name} — 30 days`, amount: plan.priceCents, currency: 'PHP', quantity: 1 }],
       payment_method_types: ['card', 'gcash', 'paymaya'],
       success_url: successUrl.toString(), cancel_url: cancelUrl.toString(),
       reference_number: input.userId,
-      metadata: { casha_ba_user_id: input.userId, product: 'casha-ba-plus-test' },
+      metadata: { casha_ba_user_id: input.userId, product: input.plan === 'PLUS' ? 'casha-ba-plus-test' : 'casha-ba-plan-test', plan: input.plan },
       send_email_receipt: false, show_description: true, show_line_items: true,
     } } }),
   }, 'v2');
@@ -95,18 +104,32 @@ export async function createTestPlusCheckout(input: { userId: string; attempt: s
 
 export async function retrieveTestCheckout(id: string) {
   assertTestCheckoutConfigured();
-  return validateTestCheckout(await request<PayMongoCheckout>(`/checkout_sessions/${encodeURIComponent(id)}`));
+  const checkout = validateTestCheckout(await request<PayMongoCheckout>(`/checkout_sessions/${encodeURIComponent(id)}`));
+  if (checkout.id !== id) throw new PayMongoError('PayMongo returned a different checkout.', 502, 'CHECKOUT_MISMATCH');
+  return checkout;
 }
 
-export function verifiedTestPayment(checkout: PayMongoCheckout, userId: string) {
+export async function expireTestCheckout(id: string) {
+  const current = await retrieveTestCheckout(id);
+  if (current.attributes.status === 'expired') return current;
+  const expired = validateTestCheckout(await request<PayMongoCheckout>(`/checkout_sessions/${encodeURIComponent(id)}/expire`, {
+    method: 'POST', headers: { 'Idempotency-Key': idempotencyKey('expire-checkout', id) },
+  }));
+  if (expired.id !== id || expired.attributes.status !== 'expired') throw new PayMongoError('Checkout closure has not been confirmed. No replacement checkout will be opened.', 502, 'CHECKOUT_NOT_CLOSED');
+  return expired;
+}
+
+export function verifiedTestPayment(checkout: PayMongoCheckout, userId: string, plan: PaidPlan = 'PLUS', amountCents = PLAN_CATALOG[plan].priceCents as number) {
   const attributes = checkout.attributes;
-  if (attributes.livemode !== false || attributes.reference_number !== userId || attributes.metadata?.casha_ba_user_id !== userId || attributes.metadata?.product !== 'casha-ba-plus-test') {
+  const product = plan === 'PLUS' ? 'casha-ba-plus-test' : 'casha-ba-plan-test';
+  if (attributes.livemode !== false || attributes.reference_number !== userId || attributes.metadata?.casha_ba_user_id !== userId || attributes.metadata?.product !== product ||
+      (plan !== 'PLUS' && attributes.metadata?.plan !== plan) || (attributes.metadata?.plan && attributes.metadata.plan !== plan)) {
     throw new PayMongoError('This test checkout does not belong to this account.', 409, 'CHECKOUT_MISMATCH');
   }
-  if (attributes.line_items.length !== 1 || attributes.line_items[0]?.amount !== 9900 || attributes.line_items[0]?.currency !== 'PHP' || attributes.line_items[0]?.quantity !== 1) {
-    throw new PayMongoError('The test checkout amount does not match Casha-Ba Plus.', 409, 'CHECKOUT_AMOUNT_MISMATCH');
+  if (attributes.line_items.length !== 1 || attributes.line_items[0]?.amount !== amountCents || attributes.line_items[0]?.currency !== 'PHP' || attributes.line_items[0]?.quantity !== 1) {
+    throw new PayMongoError('The test checkout amount does not match the selected Casha-Ba plan.', 409, 'CHECKOUT_AMOUNT_MISMATCH');
   }
-  return attributes.payments?.find(payment => payment.attributes.status === 'paid' && payment.attributes.livemode === false && payment.attributes.amount === 9900 && payment.attributes.currency === 'PHP') ?? null;
+  return attributes.payments?.find(payment => payment.attributes.status === 'paid' && payment.attributes.livemode === false && payment.attributes.amount === amountCents && payment.attributes.currency === 'PHP') ?? null;
 }
 
 function idempotencyKey(scope: string, identifier: string) {
@@ -114,9 +137,14 @@ function idempotencyKey(scope: string, identifier: string) {
 }
 
 export async function createPlusPlan(identifier: string) {
+  return createPaidPlan(identifier, 'PLUS');
+}
+export async function createPaidPlan(identifier: string, planId: PaidPlan) {
+  const plan = PLAN_CATALOG[planId];
+  const name = planId === 'PLUS' ? 'Plus' : plan.name;
   return request<Resource<Record<string, unknown>>>('/subscriptions/plans', {
-    method: 'POST', headers: { 'Idempotency-Key': idempotencyKey('plus-plan', identifier) },
-    body: JSON.stringify({ data: { attributes: { type: 'scheduled', name: 'Casha-Ba Plus', description: 'Monthly Casha-Ba Plus access', amount: 9900, currency: 'PHP', interval: 'monthly', interval_count: 1, metadata: { product: 'casha-ba-plus' } } } }),
+    method: 'POST', headers: { 'Idempotency-Key': idempotencyKey('paid-plan', `${identifier}:${planId}:${plan.priceCents}`) },
+    body: JSON.stringify({ data: { attributes: { type: 'scheduled', name: `Casha-Ba ${name}`, description: `Monthly Casha-Ba ${name} access`, amount: plan.priceCents, currency: 'PHP', interval: 'monthly', interval_count: 1, metadata: { product: 'casha-ba-plan', plan: planId } } } }),
   });
 }
 
@@ -127,12 +155,18 @@ export async function createCustomer(user: { id: string; firstName: string; last
   });
 }
 
-export async function createSubscription(input: { userId: string; planId: string; customerId: string; previousSubscriptionId?: string | null }) {
+export async function createSubscription(input: { userId: string; planId: string; customerId: string; previousSubscriptionId?: string | null; attemptId?: string }) {
   return request<Resource<PayMongoSubscriptionAttributes>>('/subscriptions', {
     // A retry within one attempt reuses the key; a cancelled subscription starts a new attempt.
-    method: 'POST', headers: { 'Idempotency-Key': idempotencyKey('subscription', `${input.userId}:${input.previousSubscriptionId ?? 'first'}`) },
+    method: 'POST', headers: { 'Idempotency-Key': idempotencyKey('subscription', `${input.userId}:${input.planId}:${input.attemptId ?? input.previousSubscriptionId ?? 'first'}`) },
     body: JSON.stringify({ data: { attributes: { plan_id: input.planId, customer_id: input.customerId } } }),
   });
+}
+
+export async function retrievePayMongoSubscription(id: string) {
+  const subscription = await request<Resource<PayMongoSubscriptionAttributes>>(`/subscriptions/${encodeURIComponent(id)}`);
+  if (subscription.id !== id) throw new PayMongoError('PayMongo returned a different subscription.', 502);
+  return subscription;
 }
 
 export async function cancelPayMongoSubscription(subscriptionId: string) {

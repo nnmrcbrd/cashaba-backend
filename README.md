@@ -2,6 +2,8 @@
 
 The backend is an Express 5 API backed by PostgreSQL and Prisma. It owns authentication, authorization, financial operations, Safe-to-Spend calculations, analytics, imports, AI commands, and administration.
 
+Assistant tools, limits, configuration and the preserved 150-question evaluation bank are documented in [docs/AI_ASSISTANT.md](docs/AI_ASSISTANT.md).
+
 ## Local setup
 
 1. Copy `.env.example` to `.env` and replace every placeholder.
@@ -15,6 +17,8 @@ Use a separate PostgreSQL database in `TEST_DATABASE_URL` for integration tests.
 
 - `npm run build` builds the production server.
 - `npm run lint` runs ESLint.
+- `npm run ai:index` embeds and upserts the approved question and guidance knowledge after the semantic-knowledge migration. It skips unchanged entries and does not index private financial records.
+- `AI_RAG_EVAL=1 npm run ai:verify-rag` checks real query embeddings and database cosine retrieval; use the PowerShell environment syntax in `docs/AI_ASSISTANT.md`.
 - `npm test` runs unit and financial-rule tests.
 - `npm run test:integration` runs database-backed API and main-journey tests.
 - `npm run smoke:api` checks a running API.
@@ -30,7 +34,9 @@ See [SMTP_SETUP.md](SMTP_SETUP.md) for the setup steps, Gmail sender example, em
 
 For production billing, set `BILLING_MODE=disabled` while payment collection is unavailable. Use `BILLING_MODE=paymongo` only after PayMongo Subscriptions access, checkout, and signed webhooks have been verified. The local `demo` mode is for the capstone demonstration and is unavailable in production. There is no generic billing webhook mode.
 
-For the capstone payment demonstration, use `BILLING_MODE=paymongo_test` and a `PAYMONGO_SECRET_KEY` starting with `sk_test_`. Purchase Plus opens PayMongo Hosted Checkout for a simulated ₱99 purchase. The success and cancel URLs return to `/subscription` on `FRONTEND_URL`. The backend retrieves the session with the secret test key and checks ownership, amount, currency, and a paid test payment before granting 30 days of Plus. Return URL parameters alone never grant access. Verification is idempotent and does not reactivate a cancelled plan. No automatic renewal or real charge occurs; the existing Switch to Free button remains available. Localhost does not need a public webhook for this test flow. Hosted payment methods depend on the PayMongo merchant account's enabled channels.
+Accounts receive one 14-day trial. Basic (₱99), Standard (₱149), and Premium (₱199) keep financial editing enabled after the trial with 50/200/500 monthly AI requests and 20/100/250 monthly scans. Existing legacy Plus access remains valid. After expiry, viewing/exporting existing data remains available; financial writes, AI requests and scans return HTTP 402. See [subscription policy](docs/SUBSCRIPTIONS.md).
+
+For the capstone payment demonstration, use BILLING_MODE=paymongo_test and a PAYMONGO_SECRET_KEY starting with sk_test_. Each selected tier opens PayMongo Hosted Checkout with its server-owned price. The return URL alone cannot grant access: the backend verifies checkout ownership, stored tier, amount, currency and a paid test payment before granting 30 days. There is no real charge or automatic renewal in test mode. Cancellation ends access without resetting the trial or usage.
 
 See the repository-level README for the calculation contract and complete demonstration checklist.
 

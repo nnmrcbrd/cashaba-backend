@@ -5,7 +5,7 @@ import { money } from "@/utils/money";
 import { z } from "zod";
 import { isFinancialDate } from "@/utils/calendar";
 import { FinancialError, financialResponse, requireWallet, requestOperation, withFinancialOperation } from '@/services/financialOperation';
-import { recordMovement, requireNoActiveMovements } from '@/services/movements';
+import { recordMovement, requireNoActiveMovements, updateBillAmount } from '@/services/movements';
 import { positiveMoney } from '@/schema/movement';
 
 const incomeSetupSchema = z.object({ totalIncome: positiveMoney, incomePeriod: z.enum(["weekly", "monthly"]) });
@@ -18,7 +18,12 @@ const fixedExpenseSchema = z.object({
   reminderDays: z.coerce.number().int().min(0).max(30).default(3),
   walletId: z.string().uuid().optional().nullable(),
 });
-const fixedExpenseUpdateSchema = fixedExpenseSchema.partial().refine((data) => Object.keys(data).length > 0, "At least one change is required");
+// PATCH must leave omitted fields alone; optional defaults still run in Zod 4.
+const fixedExpenseUpdateSchema = fixedExpenseSchema.partial().extend({
+  frequency: z.enum(["ONE_TIME", "WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"]).optional(),
+  category: z.string().trim().min(1).max(50).optional(),
+  reminderDays: z.coerce.number().int().min(0).max(30).optional(),
+}).refine((data) => Object.keys(data).length > 0, "At least one change is required");
 const savingsGoalSchema = z.object({ name: z.string().trim().min(1).max(120), targetAmount: positiveMoney, monthlyAllocation: z.coerce.number().min(0).finite().default(0) });
 const savingsGoalUpdateSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -93,14 +98,18 @@ export const updateFixedExpense = async (req: Request, res: Response) => {
       const existing = await tx.fixedExpense.findFirst({ where: { id, userId } });
       if (!existing) throw new FinancialError('Obligation not found', 404);
       if (parsed.data.walletId) await requireWallet(tx, userId, parsed.data.walletId);
-      if (parsed.data.amount !== undefined || parsed.data.frequency !== undefined || parsed.data.dueDate !== undefined) {
+      const scheduleChanged = (parsed.data.frequency !== undefined && parsed.data.frequency !== existing.frequency)
+        || (parsed.data.dueDate !== undefined && (parsed.data.dueDate ? new Date(parsed.data.dueDate).getTime() : null) !== (existing.dueDate?.getTime() ?? null));
+      if (scheduleChanged) {
         // Historical schedule snapshots would otherwise be invalidated.
         if (await tx.transaction.count({ where: { fixedExpenseId: id, userId } })) throw new FinancialError('Create a new obligation to change a schedule with payment history.', 409);
       }
       const frequency = parsed.data.frequency ?? existing.frequency;
       const dueDate = parsed.data.dueDate === undefined ? existing.dueDate : parsed.data.dueDate ? new Date(parsed.data.dueDate) : null;
       const scheduled = dueDate ?? (frequency !== 'ONE_TIME' ? new Date() : null);
-      return tx.fixedExpense.update({ where: { id }, data: { ...parsed.data, dueDate: scheduled, scheduleAnchor: parsed.data.dueDate !== undefined || parsed.data.frequency !== undefined ? scheduled : undefined } });
+      const { amount, ...details } = parsed.data;
+      const updated = await tx.fixedExpense.update({ where: { id }, data: { ...details, dueDate: scheduled, scheduleAnchor: scheduleChanged ? scheduled : undefined } });
+      return amount !== undefined && amount !== money(existing.amount) ? updateBillAmount(tx, userId, updated, amount) : updated;
     }, requestOperation(req));
     res.json({ expense: expenseJson(expense), safeToSpend: await recalculateSafeToSpend(userId) });
   } catch (error) { financialResponse(res, error, 'Error updating obligation'); }

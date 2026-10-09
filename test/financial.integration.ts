@@ -5,6 +5,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Client } from 'pg';
 import bcrypt from 'bcryptjs';
+import type { PayMongoCheckout } from '../src/services/paymongo';
 
 // Require an explicit test database. Every object and test user additionally
 // lives in a random isolated schema. No application schema is queried.
@@ -25,6 +26,9 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     .replace(/CREATE SCHEMA IF NOT EXISTS "public";/g, '')
     .replaceAll('"public".', `"${schema}".`);
   await admin.query(baseline);
+  // The current assistant client selects this additive metadata column even
+  // when Gemini/vector retrieval is disabled in the financial test fixture.
+  await admin.query('ALTER TABLE "AiSession" ADD COLUMN IF NOT EXISTS "context_metadata" JSONB');
   // Exercise the additive migration against the preceding shape, with a legacy
   // user present, instead of only testing a freshly generated schema.
   await admin.query('DROP TABLE "FinancialOperation"; ALTER TABLE "User" DROP COLUMN "local_credential_verified", DROP COLUMN "google_subject", DROP COLUMN "session_version"; ALTER TABLE "Loan" DROP COLUMN "schedule_anchor"; ALTER TABLE "FixedExpense" DROP COLUMN "schedule_anchor"; ALTER TABLE "Wallet" DROP COLUMN "custom_type"; ALTER TABLE "Subscription" DROP COLUMN "provider_plan_id";');
@@ -37,6 +41,12 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
   assert.ok((await admin.query("SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name='Subscription' AND column_name='provider_plan_id'", [schema])).rows.length);
   await admin.query('DROP TABLE "RateLimitBucket"');
   await admin.query(await readFile(new URL('../prisma/migrations/20261002000000_shared_rate_limits/migration.sql', import.meta.url), 'utf8'));
+  await admin.query('ALTER TABLE "FixedExpense" DROP COLUMN "amount_schedule"');
+  await admin.query(await readFile(new URL('../prisma/migrations/20261009120000_editable_bill_amounts/migration.sql', import.meta.url), 'utf8'));
+
+  await admin.query('ALTER TABLE "User" DROP COLUMN "trial_started_at"; ALTER TABLE "Subscription" DROP COLUMN "requested_plan", DROP COLUMN "checkout_amount_cents"');
+  await admin.query(await readFile(new URL('../prisma/migrations/20261009220000_trial_and_subscription_tiers/migration.sql', import.meta.url), 'utf8'));
+  assert.ok((await admin.query('SELECT "trial_started_at" FROM "User" WHERE id=$1', ['legacy'])).rows[0].trial_started_at);
 
   process.env.TEST_DATABASE_URL = connectionString!;
   process.env.TEST_DATABASE_SCHEMA = schema;
@@ -49,7 +59,7 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
   const { recordMovement, reverseMovement } = await import('../src/services/movements');
   const auth = await import('../src/services/auth');
   const { calculateSafeToSpend } = await import('../src/utils/safeToSpend');
-  const { consumeUsage, refundUsage, getSubscriptionSummary } = await import('../src/services/subscription');
+  const { consumeUsage, refundUsage, getSubscriptionSummary, monthlyPeriod } = await import('../src/services/subscription');
   const { confirmAiAction } = await import('../src/controllers/aiCommand.controller');
   const { importStatement } = await import('../src/services/statementImport');
   const server = app.listen(0, '127.0.0.1');
@@ -74,9 +84,11 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     const result = await response.json() as Array<{ balance: number }> & {
       id?: string; expense?: { id: string; dueDate: string | null }; breakdown?: { savings: number; spending: number; debt: number };
       budget?: { target: number }; configured?: boolean; customType?: string; targetAmount?: number; safeToSpend?: number;
+      accessStatus?: string; trialDaysRemaining?: number;
       setup?: { totalIncome: number }; plan?: string; cancelAtPeriodEnd?: boolean; paymentPending?: boolean; limits?: { aiRequests: number; receiptScans: number };
       summary?: { totalIncome: number; loanCollections: number; netCashFlow: number };
       requiresClarification?: boolean; requiresConfirmation?: boolean; content?: string; walletOptions?: string[];
+      code?: string; metric?: string; limit?: number; resetAt?: string;
     };
     return { status: response.status, body: result };
   }
@@ -664,7 +676,7 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     wallets = await api(f.token, '/wallets');
     assert.equal(wallets.body[0].balance, 9_750);
   });
-  await t.test('Free and Plus entitlements report limits and support the capstone activation flow', async () => {
+  await t.test('trial and Basic entitlements report limits and support the capstone activation flow', async () => {
     const f = await fixture();
     process.env.BILLING_MODE = 'demo';
     const free = await api(f.token, '/subscriptions/me');
@@ -674,8 +686,8 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     assert.equal((await api(f.token, '/subscriptions/paymongo/start', 'POST', { phone: '+639171234567' })).status, 503);
     const plus = await api(f.token, '/subscriptions/demo/activate', 'POST', {});
     assert.equal(plus.status, 200);
-    assert.equal(plus.body.plan, 'PLUS');
-    assert.equal(plus.body.limits.receiptScans, 100);
+    assert.equal(plus.body.plan, 'BASIC');
+    assert.equal(plus.body.limits.receiptScans, 20);
     const cancelled = await api(f.token, '/subscriptions/cancel', 'POST', {});
     assert.equal(cancelled.status, 200);
     assert.equal(cancelled.body.plan, 'FREE');
@@ -709,7 +721,10 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
         return Response.json({ data: session });
       }
       if (url.startsWith('https://api.paymongo.com/v1/checkout_sessions/')) {
-        return Response.json({ data: sessions.get(url.split('/').at(-1)!) });
+        const id = url.split('/')[5]!;
+        const session = sessions.get(id)!;
+        if (url.endsWith('/expire')) session.attributes.status = 'expired';
+        return Response.json({ data: session });
       }
       return originalFetch(input, init);
     };
@@ -730,7 +745,7 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
       assert.equal((await api(f.token, '/subscriptions/paymongo/test/verify', 'POST', {})).status, 502);
       session.attributes.livemode = false;
       const results = await Promise.all([api(f.token, '/subscriptions/paymongo/test/verify', 'POST', {}), api(f.token, '/subscriptions/paymongo/test/verify', 'POST', {})]);
-      assert.ok(results.every(result => result.status === 200 && result.body.plan === 'PLUS'));
+      assert.ok(results.every(result => result.status === 200 && result.body.plan === 'BASIC'));
       assert.equal(await prisma.billingEvent.count({ where: { providerEventId: 'paymongo-test-checkout:cs_test_1' } }), 1);
       const paid = await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } });
       assert.equal(paid.currentPeriodEnd.getTime() - paid.currentPeriodStart.getTime(), 30 * 86_400_000);
@@ -914,7 +929,13 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     const f = await fixture();
     const first = await api(f.token, '/ai/chat', 'POST', { message: 'spent 100 on fare today' });
     await prisma.usagePeriod.updateMany({ where: { userId: f.user.id }, data: { aiRequests: 10 } });
-    assert.equal((await api(f.token, '/ai/chat', 'POST', { message: 'Cash', clarificationId: first.body.id })).status, 429);
+    const limited = await api(f.token, '/ai/chat', 'POST', { message: 'Cash', clarificationId: first.body.id });
+    assert.equal(limited.status, 429);
+    assert.equal(limited.body.code, 'USAGE_LIMIT_REACHED');
+    assert.equal(limited.body.metric, 'aiRequests');
+    assert.equal(limited.body.limit, 10);
+    const now = new Date();
+    assert.equal(limited.body.resetAt, new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString());
     assert.equal((await prisma.aiSession.findUniqueOrThrow({ where: { id: first.body.id } })).state, 'NEEDS_CLARIFICATION');
     const cancelled = await api(f.token, '/ai/chat', 'POST', { message: 'cancel', clarificationId: first.body.id });
     assert.equal(cancelled.status, 200);
@@ -950,6 +971,153 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     assert.equal(result.dueDate!.getMonth(), 1);
     assert.equal(result.dueDate!.getDate(), 28);
     assert.equal((await api(f.token, `/income-setup/fixed-expenses/${bill.id}`, 'DELETE')).status, 409);
+  });
+  await t.test('a larger payment corrects only the selected bill and is idempotent', async () => {
+    const f = await fixture();
+    const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'Water', amount: 900, frequency: 'ONE_TIME' } });
+    const other = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'House rent', amount: 2500, frequency: 'ONE_TIME' } });
+    await prisma.incomeSetup.create({ data: { userId: f.user.id, totalIncome: 5000, incomePeriod: 'monthly' } });
+    await withFinancialOperation(f.user.id, tx => recordMovement(tx, f.user.id, { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: 'Water partial payment', category: 'Bills', amount: 500, date: new Date() }));
+    const input = { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: 'Actual Water payment', category: 'Bills', amount: 700, date: new Date().toISOString() };
+    const retryKey = randomUUID();
+    const paid = await api(f.token, '/transactions', 'POST', input, retryKey);
+    assert.equal(paid.status, 201);
+    assert.equal((await api(f.token, '/transactions', 'POST', input, retryKey)).body.id, paid.body.id);
+    const saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amount), 1200); assert.equal(Number(saved.amountPaid), 1200); assert.equal(saved.status, 'COMPLETED');
+    const rent = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: other.id } });
+    assert.equal(Number(rent.amount), 2500); assert.equal(Number(rent.amountPaid), 0);
+    assert.equal(await prisma.transaction.count({ where: { userId: f.user.id, fixedExpenseId: bill.id } }), 2);
+    assert.equal((await api(f.token, '/wallets')).body[0].balance, 8800);
+    const snapshot = (await prisma.transactionAudit.findFirstOrThrow({ where: { transactionId: paid.body.id!, action: 'CREATED' } })).snapshot as { relatedBefore: { amountBefore: string; amount: string } };
+    assert.equal(snapshot.relatedBefore.amountBefore, '900'); assert.equal(snapshot.relatedBefore.amount, '1200');
+    const summary = await calculateSafeToSpend(f.user.id);
+    assert.equal(summary.totalFixed, 2500); assert.equal(summary.totalExpenses, 1200);
+  });
+  await t.test('higher payments work for utilities, rent and subscriptions with exact centavos', async () => {
+    for (const name of ['Water bill', 'Electricity bill', 'House rent', 'Streaming subscriptions']) {
+      const f = await fixture();
+      const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name, amount: 150, frequency: 'MONTHLY', dueDate: new Date(2026, 0, 31, 12) } });
+      const result = await api(f.token, '/transactions', 'POST', { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: name, category: 'Bills', amount: 275.50, date: new Date().toISOString() });
+      assert.equal(result.status, 201, name);
+      const saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+      assert.equal(Number(saved.amount), 275.50, name); assert.equal(Number(saved.amountPaid), 0, name);
+      assert.equal(saved.dueDate!.getMonth(), 1, name);
+      assert.equal((await api(f.token, '/wallets')).body[0].balance, 9724.50, name);
+    }
+  });
+  await t.test('a smaller bill payment remains partial without changing the bill total', async () => {
+    const f = await fixture();
+    const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'Water', amount: 900, frequency: 'ONE_TIME' } });
+    for (const amount of [500, 200]) assert.equal((await api(f.token, '/transactions', 'POST', { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: 'Water', category: 'Bills', amount, date: new Date().toISOString() })).status, 201);
+    const saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amount), 900); assert.equal(Number(saved.amountPaid), 700);
+    assert.equal(saved.status, 'PARTIALLY_PAID'); assert.deepEqual(saved.amountSchedule, []);
+  });
+  await t.test('automatic bill adjustment rolls back with a failed payment and enforces ownership', async () => {
+    const f = await fixture(); const stranger = await fixture();
+    const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'Electricity', amount: 150, frequency: 'ONE_TIME' } });
+    const input = { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: 'Electricity', category: 'Bills', amount: 300, date: new Date().toISOString() };
+    await assert.rejects(withFinancialOperation(f.user.id, async tx => {
+      await recordMovement(tx, f.user.id, input);
+      throw new Error('Simulated failure after recording payment');
+    }), /Simulated failure/);
+    assert.equal((await api(stranger.token, '/transactions', 'POST', { ...input, walletId: stranger.wallet.id })).status, 404);
+    assert.equal((await api(f.token, '/transactions', 'POST', { ...input, walletId: stranger.wallet.id })).status, 400);
+    assert.equal((await api(f.token, '/transactions', 'POST', { ...input, amount: 300.001 })).status, 400);
+    const saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amount), 150); assert.equal(Number(saved.amountPaid), 0); assert.deepEqual(saved.amountSchedule, []);
+    assert.equal(await prisma.transaction.count({ where: { fixedExpenseId: bill.id } }), 0);
+    assert.equal(await prisma.transactionAudit.count({ where: { userId: f.user.id } }), 0);
+  });
+  await t.test('automatic recurring bill corrections retain historical prices through reversals', async () => {
+    const f = await fixture();
+    const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'Water', amount: 150, frequency: 'MONTHLY', dueDate: new Date(2026, 0, 31, 12) } });
+    const pay = (amount: number) => api(f.token, '/transactions', 'POST', { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: 'Water', category: 'Bills', amount, date: new Date().toISOString() });
+    const first = await pay(150); const second = await pay(250);
+    assert.equal(first.status, 201); assert.equal(second.status, 201);
+    let saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amount), 250); assert.equal(saved.dueDate!.getMonth(), 2);
+    await withFinancialOperation(f.user.id, tx => reverseMovement(tx, f.user.id, second.body.id!));
+    saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amount), 250); assert.equal(Number(saved.amountPaid), 0); assert.equal(saved.dueDate!.getMonth(), 1);
+    await withFinancialOperation(f.user.id, tx => reverseMovement(tx, f.user.id, first.body.id!));
+    saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amount), 150); assert.equal(Number(saved.amountPaid), 0); assert.equal(saved.dueDate!.getMonth(), 0);
+  });
+  await t.test('bill estimates can increase and decrease before payment with fresh reserves', async () => {
+    const f = await fixture();
+    const due = new Date(); due.setUTCDate(due.getUTCDate() + 1);
+    await prisma.incomeSetup.create({ data: { userId: f.user.id, totalIncome: 1000, incomePeriod: 'monthly' } });
+    const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'Water', amount: 150, frequency: 'ONE_TIME', dueDate: due, category: 'Utilities', reminderDays: 7 } });
+    const before = await calculateSafeToSpend(f.user.id);
+    const patch = (amount: number, key?: string) => api(f.token, `/income-setup/fixed-expenses/${bill.id}`, 'PATCH', { amount }, key);
+    assert.equal((await patch(275.50)).status, 200);
+    assert.equal(Number((await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } })).amount), 275.50);
+    const edited = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(edited.frequency, 'ONE_TIME'); assert.equal(edited.category, 'Utilities'); assert.equal(edited.reminderDays, 7);
+    assert.equal((await calculateSafeToSpend(f.user.id)).totalFixed, before.totalFixed + 125.50);
+    const retryKey = randomUUID();
+    assert.equal((await patch(125.75, retryKey)).status, 200);
+    assert.equal((await patch(125.75, retryKey)).status, 200);
+    assert.equal((await calculateSafeToSpend(f.user.id)).totalFixed, before.totalFixed - 24.25);
+    assert.equal((await prisma.wallet.findUniqueOrThrow({ where: { id: f.wallet.id } })).openingBalance.toString(), '10000');
+    assert.equal(await prisma.transaction.count({ where: { userId: f.user.id } }), 0);
+    for (const amount of [0, -1, 1.234, 'Infinity']) assert.equal((await patch(amount as number)).status, 400);
+    const stranger = await fixture();
+    assert.equal((await api(stranger.token, `/income-setup/fixed-expenses/${bill.id}`, 'PATCH', { amount: 200 })).status, 404);
+  });
+  await t.test('editing a partially paid bill retains payments and rejects an amount below them', async () => {
+    const f = await fixture();
+    const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'Electricity', amount: 150, frequency: 'MONTHLY', dueDate: new Date(2026, 0, 31, 12) } });
+    const first = await withFinancialOperation(f.user.id, tx => recordMovement(tx, f.user.id, { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: 'Electricity', category: 'Bills', amount: 40, date: new Date() }));
+    const patch = (amount: number) => api(f.token, `/income-setup/fixed-expenses/${bill.id}`, 'PATCH', { amount });
+    assert.equal((await patch(250)).status, 200);
+    let saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amountPaid), 40); assert.equal(Number(saved.amount), 250);
+    assert.equal((await patch(30)).status, 400);
+    assert.equal((await patch(100)).status, 200);
+    const paid = await api(f.token, '/transactions', 'POST', { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, amount: 60, category: 'Bills', description: 'Pay revised bill', date: new Date().toISOString() });
+    assert.equal(paid.status, 201);
+    saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amountPaid), 0); assert.equal(saved.dueDate!.getMonth(), 1);
+    assert.equal((await prisma.transaction.findUniqueOrThrow({ where: { id: first.id } })).amount.toString(), '40');
+    await withFinancialOperation(f.user.id, tx => reverseMovement(tx, f.user.id, first.id));
+    saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(Number(saved.amountPaid), 60); assert.equal(saved.dueDate!.getMonth(), 0);
+  });
+  await t.test('changing the next recurring bill preserves historical prices through payment reversal', async () => {
+    const f = await fixture();
+    const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'Water', amount: 150, frequency: 'MONTHLY', dueDate: new Date(2026, 0, 31, 12) } });
+    const pay = (amount: number) => withFinancialOperation(f.user.id, tx => recordMovement(tx, f.user.id, { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: 'Water', category: 'Bills', amount, date: new Date() }));
+    const first = await pay(150);
+    assert.equal((await api(f.token, `/income-setup/fixed-expenses/${bill.id}`, 'PATCH', { amount: 250 })).status, 200);
+    let saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(saved.dueDate!.getMonth(), 1); assert.equal(Number(saved.amountPaid), 0);
+    const second = await pay(100);
+    assert.equal((await api(f.token, `/income-setup/fixed-expenses/${bill.id}`, 'PATCH', { amount: 100 })).status, 200);
+    saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(saved.dueDate!.getMonth(), 2); assert.equal(saved.dueDate!.getDate(), 31);
+    await withFinancialOperation(f.user.id, tx => reverseMovement(tx, f.user.id, second.id));
+    saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(saved.dueDate!.getMonth(), 1); assert.equal(Number(saved.amount), 100);
+    await withFinancialOperation(f.user.id, tx => reverseMovement(tx, f.user.id, first.id));
+    saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(saved.dueDate!.getMonth(), 0); assert.equal(Number(saved.amount), 150);
+    await prisma.incomeSetup.create({ data: { userId: f.user.id, totalIncome: 1000, incomePeriod: 'monthly' } });
+    assert.equal((await calculateSafeToSpend(f.user.id, new Date(2026, 1, 15))).totalFixed, 250);
+  });
+  await t.test('one-time paid bills can be corrected and reopened without deleting payment history', async () => {
+    const f = await fixture();
+    const bill = await prisma.fixedExpense.create({ data: { userId: f.user.id, name: 'One-off water bill', amount: 100, frequency: 'ONE_TIME' } });
+    await withFinancialOperation(f.user.id, tx => recordMovement(tx, f.user.id, { type: 'BILL_PAYMENT', fixedExpenseId: bill.id, walletId: f.wallet.id, description: 'Water', category: 'Bills', amount: 100, date: new Date() }));
+    assert.equal((await api(f.token, `/income-setup/fixed-expenses/${bill.id}`, 'PATCH', { amount: 150 })).status, 200);
+    let saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(saved.status, 'PARTIALLY_PAID'); assert.equal(Number(saved.amountPaid), 100);
+    assert.equal((await api(f.token, `/income-setup/fixed-expenses/${bill.id}`, 'PATCH', { amount: 100 })).status, 200);
+    saved = await prisma.fixedExpense.findUniqueOrThrow({ where: { id: bill.id } });
+    assert.equal(saved.status, 'COMPLETED');
+    assert.equal((await api(f.token, `/income-setup/fixed-expenses/${bill.id}`, 'PATCH', { frequency: 'MONTHLY' })).status, 409);
   });
   await t.test('Safe-to-Spend retains completed savings and includes arrears and every occurrence', async () => {
     const f = await fixture();
@@ -1083,4 +1251,166 @@ test('PostgreSQL API and financial integration regressions', { skip: !connection
     const result = await api(f.token, '/analytics?period=custom&startDate=2026-01-01&endDate=2026-02-28');
     assert.equal(result.status, 200); assert.equal(result.body.budget.target, 2000);
   });
+  await t.test('trial dates persist and expired trials block writes while reads and export remain available', async () => {
+    const f = await fixture();
+    const first = await getSubscriptionSummary(f.user.id);
+    assert.equal(first.accessStatus, 'TRIAL');
+    assert.equal(first.trialDaysRemaining, 14);
+    assert.equal(first.trialEndsAt.getTime() - first.trialStartedAt.getTime(), 14 * 86_400_000);
+    const originalStart = new Date(Date.now() - 15 * 86_400_000);
+    await prisma.user.update({ where: { id: f.user.id }, data: { trialStartedAt: originalStart } });
+    const summary = await getSubscriptionSummary(f.user.id);
+    assert.equal(summary.accessStatus, 'EXPIRED');
+    assert.deepEqual(summary.limits, { aiRequests: 0, receiptScans: 0 });
+    const writes = [
+      ['/wallets', 'POST'], [`/wallets/${f.wallet.id}`, 'PATCH'], [`/wallets/${f.wallet.id}`, 'DELETE'],
+      ['/transactions', 'POST'], ['/transactions/undo', 'POST'], ['/transactions/import-csv', 'POST'],
+      ['/income-setup', 'POST'], ['/income-setup/fixed-expenses', 'POST'], ['/income-setup/savings-goals', 'POST'],
+      ['/budget', 'PUT'], ['/budget/copy-previous', 'POST'], ['/loans', 'POST'],
+      ['/ai/chat', 'POST'], ['/ai/suggest-budget', 'POST'], ['/gcash/scan-image', 'POST'],
+    ];
+    for (const [route, method] of writes) {
+      const denied = await api(f.token, route!, method, {});
+      assert.equal(denied.status, 402, `${method} ${route}`);
+      assert.equal(denied.body.code, 'TRIAL_EXPIRED');
+    }
+    for (const route of ['/wallets', '/transactions', '/income-setup', '/budget', '/loans', '/ai/history', '/analytics', '/users/me', '/subscriptions/me']) {
+      assert.equal((await api(f.token, route)).status, 200, route);
+    }
+    const exported = await fetch(base + '/users/me/export', { headers: { Authorization: `Bearer ${f.token}` } });
+    assert.equal(exported.status, 200);
+    assert.match(exported.headers.get('content-type') ?? '', /spreadsheet/);
+    assert.ok((await exported.arrayBuffer()).byteLength > 0);
+    await assert.rejects(consumeUsage(f.user.id, 'aiRequests'), /14-day trial has ended/);
+    process.env.BILLING_MODE = 'demo';
+    assert.equal((await api(f.token, '/subscriptions/demo/activate', 'POST', { plan: 'BASIC' })).body.plan, 'BASIC');
+    assert.equal((await api(f.token, '/wallets', 'POST', { name: 'Trial restored by paid plan', openingBalance: 0, accountType: 'CASH', kind: 'ASSET' })).status, 201);
+    const cancelled = await api(f.token, '/subscriptions/cancel', 'POST', {});
+    assert.equal(cancelled.body.accessStatus, 'EXPIRED');
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: f.user.id } })).trialStartedAt.getTime(), originalStart.getTime());
+    assert.equal((await api(f.token, '/wallets', 'POST', {})).status, 402);
+  });
+
+  await t.test('all three demo tiers use their own limits and reject unsupported or legacy selections', async () => {
+    process.env.BILLING_MODE = 'demo';
+    for (const [plan, priceCents, aiRequests, receiptScans] of [['BASIC', 9900, 50, 20], ['STANDARD', 14900, 200, 100], ['PREMIUM', 19900, 500, 250]] as const) {
+      const f = await fixture();
+      const activated = await api(f.token, '/subscriptions/demo/activate', 'POST', { plan });
+      assert.equal(activated.status, 200);
+      assert.equal(activated.body.plan, plan);
+      assert.deepEqual(activated.body.limits, { aiRequests, receiptScans });
+      const stored = await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } });
+      assert.equal(stored.checkoutAmountCents, priceCents);
+      await prisma.usagePeriod.create({ data: { userId: f.user.id, ...monthlyPeriod(), aiRequests: aiRequests - 1, receiptScans } });
+      await consumeUsage(f.user.id, 'aiRequests');
+      await assert.rejects(consumeUsage(f.user.id, 'aiRequests'), /limit reached/);
+      await assert.rejects(consumeUsage(f.user.id, 'receiptScans'), /limit reached/);
+      assert.equal((await api(f.token, '/subscriptions/cancel', 'POST', {})).body.plan, 'FREE');
+    }
+    const f = await fixture();
+    for (const plan of ['PLUS', 'FREE', 'INVALID']) assert.equal((await api(f.token, '/subscriptions/demo/activate', 'POST', { plan })).status, 400);
+  });
+
+  await t.test('each hosted tier verifies its stored price and selected plan and a replaced checkout cannot activate', async () => {
+    const previous = { mode: process.env.BILLING_MODE, key: process.env.PAYMONGO_SECRET_KEY };
+    const originalFetch = globalThis.fetch;
+    process.env.BILLING_MODE = 'paymongo_test'; process.env.PAYMONGO_SECRET_KEY = 'sk_test_fixture';
+    const sessions = new Map<string, PayMongoCheckout>();
+    let sequence = 0;
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url === 'https://api.paymongo.com/v2/checkout_sessions') {
+        const attrs = JSON.parse(String(init?.body)).data.attributes;
+        const id = `cs_tier_${++sequence}`;
+        const session = { id, type: 'checkout_session', attributes: { ...attrs, status: 'active', livemode: false, checkout_url: `https://checkout.paymongo.com/${id}`, payments: [] } };
+        sessions.set(id, session); return Response.json({ data: session });
+      }
+      if (url.startsWith('https://api.paymongo.com/v1/checkout_sessions/')) {
+        const session = sessions.get(url.split('/')[5]!)!;
+        if (url.endsWith('/expire')) session.attributes.status = 'expired';
+        return Response.json({ data: session });
+      }
+      assert.ok(!url.startsWith('https://api.paymongo.com'), 'All provider traffic must be mocked');
+      return originalFetch(input, init);
+    };
+    const checkoutPath = '/subscriptions/paymongo/test/checkout', verifyPath = '/subscriptions/paymongo/test/verify';
+    try {
+      for (const [plan, amount] of [['BASIC', 9900], ['STANDARD', 14900], ['PREMIUM', 19900]] as const) {
+        const f = await fixture();
+        assert.equal((await api(f.token, checkoutPath, 'POST', { plan, amount: 1 })).status, 201);
+        const local = await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } });
+        assert.equal(local.requestedPlan, plan); assert.equal(local.checkoutAmountCents, amount);
+        const session = sessions.get(local.providerSubscriptionId!)!;
+        assert.equal(session.attributes.line_items[0]!.amount, amount);
+        session.attributes.payments = [{ id: 'payment', type: 'payment', attributes: { status: 'paid', amount, currency: 'PHP', livemode: false } }];
+        session.attributes.metadata!.plan = 'WRONG';
+        assert.equal((await api(f.token, verifyPath, 'POST', {})).status, 409);
+        session.attributes.metadata!.plan = plan;
+        session.attributes.line_items[0]!.amount = amount - 100;
+        assert.equal((await api(f.token, verifyPath, 'POST', {})).status, 409);
+        session.attributes.line_items[0]!.amount = amount;
+        assert.equal((await api(f.token, verifyPath, 'POST', {})).body.plan, plan);
+      }
+      const f = await fixture();
+      await api(f.token, checkoutPath, 'POST', { plan: 'BASIC' });
+      const first = await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } });
+      assert.equal((await api(f.token, checkoutPath, 'POST', { plan: 'PREMIUM' })).status, 409, 'first pending checkout wins');
+      assert.equal((await api(f.token, '/subscriptions/cancel', 'POST', {})).status, 200);
+      assert.equal(sessions.get(first.providerSubscriptionId!)!.attributes.status, 'expired', 'old checkout is closed before replacement');
+      assert.equal((await api(f.token, checkoutPath, 'POST', { plan: 'PREMIUM' })).status, 201);
+      const next = await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } });
+      assert.notEqual(first.providerSubscriptionId, next.providerSubscriptionId);
+      sessions.get(first.providerSubscriptionId!)!.attributes.payments = [{ id: 'old-paid', type: 'payment', attributes: { status: 'paid', amount: 9900, currency: 'PHP', livemode: false } }];
+      assert.equal((await api(f.token, verifyPath, 'POST', {})).body.plan, 'FREE');
+      assert.equal((await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } })).requestedPlan, 'PREMIUM');
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previous.mode === undefined) delete process.env.BILLING_MODE; else process.env.BILLING_MODE = previous.mode;
+      if (previous.key === undefined) delete process.env.PAYMONGO_SECRET_KEY; else process.env.PAYMONGO_SECRET_KEY = previous.key;
+    }
+  });
+
+  await t.test('recurring checkout and signed paid invoices activate the selected tier only at its correct price', async () => {
+    const previous = { mode: process.env.BILLING_MODE, key: process.env.PAYMONGO_SECRET_KEY, webhook: process.env.PAYMONGO_WEBHOOK_SECRET };
+    const originalFetch = globalThis.fetch;
+    process.env.BILLING_MODE = 'paymongo'; process.env.PAYMONGO_SECRET_KEY = 'sk_test_fixture'; process.env.PAYMONGO_WEBHOOK_SECRET = 'test-tier-signature';
+    const plans = new Map<string, { amount: number }>();
+    let sequence = 0;
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('https://api.paymongo.com')) {
+        const attrs = JSON.parse(String(init?.body)).data.attributes;
+        const id = `provider_${++sequence}`;
+        if (url.endsWith('/subscriptions/plans')) plans.set(id, attrs);
+        return Response.json({ data: { id, type: 'resource', attributes: { ...attrs, status: 'pending' } } });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      for (const [plan, amount] of [['BASIC', 9900], ['STANDARD', 14900], ['PREMIUM', 19900]] as const) {
+        const f = await fixture();
+        assert.equal((await api(f.token, '/subscriptions/paymongo/start', 'POST', { plan, phone: '+639171234567', amount: 1 })).status, 201);
+        const local = await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } });
+        assert.equal(plans.get(local.providerPlanId!)?.amount, amount);
+        const eventAt = Math.floor(Date.now() / 1000);
+        async function paidInvoice(charged: number) {
+          const event = { data: { id: `evt-${randomUUID()}`, attributes: { type: 'subscription.invoice.paid', livemode: false, created_at: eventAt,
+            data: { id: `inv-${randomUUID()}`, type: 'invoice', attributes: { status: 'paid', amount: charged, currency: 'PHP', subscription: { id: local.providerSubscriptionId, plan: { id: local.providerPlanId } } } } } } };
+          const raw = JSON.stringify(event), timestamp = String(Math.floor(Date.now() / 1000));
+          const digest = createHmac('sha256', process.env.PAYMONGO_WEBHOOK_SECRET!).update(timestamp + '.').update(raw).digest('hex');
+          return originalFetch(base + '/subscriptions/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'paymongo-signature': `t=${timestamp},te=${digest}` }, body: raw });
+        }
+        assert.equal((await paidInvoice(amount - 100)).status, 409);
+        assert.equal((await prisma.subscription.findUniqueOrThrow({ where: { userId: f.user.id } })).plan, 'FREE');
+        assert.equal((await paidInvoice(amount)).status, 200);
+        assert.equal((await getSubscriptionSummary(f.user.id)).plan, plan);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      for (const [name, value] of [['BILLING_MODE', previous.mode], ['PAYMONGO_SECRET_KEY', previous.key], ['PAYMONGO_WEBHOOK_SECRET', previous.webhook]]) {
+        if (value === undefined) delete process.env[name!]; else process.env[name!] = value;
+      }
+    }
+  });
+
 });

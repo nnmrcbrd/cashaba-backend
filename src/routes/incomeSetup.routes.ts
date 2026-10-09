@@ -1,3 +1,4 @@
+import { requireProductAccess } from '@/middlewares/productAccess.middleware';
 import { Router } from "express";
 import { authenticate } from "@/middlewares/auth.middleware";
 import { authorize } from "@/middlewares/rbac.middleware";
@@ -16,7 +17,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate, authorize(["USER"]));
+router.use(authenticate, authorize(["USER"]), requireProductAccess);
 
 // Income setup
 router.get("/", getIncomeSetup);

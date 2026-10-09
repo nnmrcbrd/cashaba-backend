@@ -23,11 +23,12 @@ export async function databaseRateLimit(key: string, windowMs: number): Promise<
   return { count: rows[0].hits, resetAt: Date.now() + Math.ceil(remainingMs) };
 }
 
-export function rateLimit(options: { windowMs: number; max: number }) {
+export function rateLimit(options: { windowMs: number; max: number; identity?: 'user' }) {
   const entries = new Map<string, Entry>();
   return async (req: Request, res: Response, next: NextFunction) => {
     const now = Date.now();
-    const key = createHash('sha256').update(`${options.windowMs}:${options.max}:${req.ip}:${req.user?.userId || 'anonymous'}:${req.baseUrl}:${req.path}`).digest('hex');
+    const identity = options.identity === 'user' && req.user?.userId ? `user:${req.user.userId}` : `${req.ip}:${req.user?.userId || 'anonymous'}`;
+    const key = createHash('sha256').update(`${options.windowMs}:${options.max}:${identity}:${req.baseUrl}:${req.path}`).digest('hex');
     const current = entries.get(key);
     let entry: Entry;
     if (process.env.RATE_LIMIT_STORE === 'postgres' || process.env.NODE_ENV === 'production') {
@@ -45,7 +46,7 @@ export function rateLimit(options: { windowMs: number; max: number }) {
     if (entry.count > options.max) {
       const retryAfterSeconds = Math.max(1, Math.ceil((entry.resetAt - Date.now()) / 1000));
       res.setHeader("Retry-After", retryAfterSeconds);
-      res.status(429).json({ message: "Too many attempts. Please try again later.", retryAfterSeconds });
+      res.status(429).json({ message: "Too many attempts. Please try again later.", code: "RATE_LIMITED", retryAfterSeconds });
       return;
     }
     next();

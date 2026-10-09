@@ -17,7 +17,9 @@
     "test:reports": "tsx --test ../casha-ba-frontend/lib/pdfExport.test.ts",
     "smoke:api": "tsx src/scripts/smoke-api.ts",
     "check:production": "tsx src/scripts/check-production.ts",
-    "check:email": "tsx src/scripts/check-email.ts"
+    "check:email": "tsx src/scripts/check-email.ts",
+    "ai:index": "tsx src/scripts/index-assistant-knowledge.ts",
+    "ai:verify-rag": "tsx src/scripts/verify-assistant-rag.ts"
   },
   "keywords": [],
   "author": "",

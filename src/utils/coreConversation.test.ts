@@ -41,7 +41,7 @@ test('grounded conversation accepts only server-rendered numbers and known entit
 test('core context survives a pause while unrelated requests can start a new topic', () => {
   const budget = coreReply('Explain my budget', facts);
   assert.equal(readCoreContext(budget.context)?.topic, 'budget');
-  assert.equal(readCoreContext(budget.context, Date.now() + 24 * 60 * 60_000)?.topic, 'budget');
+  assert.equal(readCoreContext(budget.context, Date.now() + 24 * 60 * 60_000), null);
   assert.equal(readCoreContext(budget.context, Date.now() - 2 * 60_000), null);
   assert.equal(coreTopic('Would that be a good idea?', budget.context), 'budget');
   assert.equal(coreTopic('Tell me the weather', budget.context), 'help');

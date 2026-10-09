@@ -1,0 +1,5985 @@
+{
+  "version": "casha-ai-questions-v1",
+  "sourceSha256": "1408d23d4d9054474cd6ce52e5a512a1168bbd37f1799d1c7fcb5fbb556765a0",
+  "fixture": "planningFixtures.ts (synthetic only)",
+  "note": "Complete inputs contain supplemental user answers. These are tool and mocked-extraction evaluations; live language understanding is evaluated separately.",
+  "questions": [
+    {
+      "id": 1,
+      "question": "How long will it take me to save enough to buy the latest iPhone 18 Pro Max?",
+      "intent": "Phone price and contribution timeline; price must be supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_timeline",
+        "target": 80000,
+        "saved": 20000,
+        "contribution": 4000,
+        "frequency": "monthly"
+      },
+      "expected": {
+        "remaining": 60000,
+        "periods": 15,
+        "completionDate": null
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "affordable contribution and frequency",
+        "first contribution date for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_timeline",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 2,
+      "question": "How much should I save every payday to buy a ₱50,000 laptop?",
+      "intent": "Payday contribution with 20 confirmed contribution dates supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 50000,
+        "saved": 10000,
+        "periods": 20
+      },
+      "expected": {
+        "required": 2000,
+        "contributions": 20
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "target": 50000,
+        "frequency": "payday"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 3,
+      "question": "Can I afford a new phone based on my current income and expenses?",
+      "intent": "Phone affordability with supplemental total price",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 30000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 6800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 4,
+      "question": "If I buy a ₱30,000 phone today, will I still have enough for my upcoming bills?",
+      "intent": "Phone purchase before upcoming bills",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 30000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 6800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en",
+        "purchase": 30000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 5,
+      "question": "What phone budget can I afford without using my emergency savings?",
+      "intent": "Maximum phone budget while protecting cash emergency reserve",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 6,
+      "question": "Can I buy a gaming PC worth ₱60,000 within one year?",
+      "intent": "Gaming PC contribution for twelve supplied monthly dates",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 60000,
+        "saved": 0,
+        "periods": 12
+      },
+      "expected": {
+        "required": 5000,
+        "contributions": 12
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "target": 60000,
+        "until": "2027-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 7,
+      "question": "How long would it take me to save for a motorcycle?",
+      "intent": "Motorcycle target with supplied price and saving pace",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_timeline",
+        "target": 80000,
+        "saved": 20000,
+        "contribution": 4000,
+        "frequency": "monthly"
+      },
+      "expected": {
+        "remaining": 60000,
+        "periods": 15,
+        "completionDate": null
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "affordable contribution and frequency",
+        "first contribution date for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_timeline",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 8,
+      "question": "How much should I save monthly for a ₱20,000 appliance?",
+      "intent": "Appliance monthly saving with ten contributions supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 20000,
+        "saved": 0,
+        "periods": 10
+      },
+      "expected": {
+        "required": 2000,
+        "contributions": 10
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "target": 20000,
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 9,
+      "question": "Can I afford new shoes worth ₱4,000 this month?",
+      "intent": "Shoes purchase",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 4000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 32800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en",
+        "purchase": 4000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 10,
+      "question": "Should I buy this item now or wait until my next payday?",
+      "intent": "Buy-now illustration; future paycheck remains unreceived",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 10000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 26800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en",
+        "frequency": "payday"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 11,
+      "question": "How will buying a ₱10,000 tablet affect my other savings goals?",
+      "intent": "Tablet funded from explicitly selected Laptop goal",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Laptop"
+        ],
+        "withdrawal": 10000
+      },
+      "expected": {
+        "remaining": 50000,
+        "periods": 13
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 12,
+      "question": "Can I afford both a laptop and a phone this year?",
+      "intent": "Two competing purchase goals share one contribution",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_split",
+        "goalNames": [
+          "Laptop",
+          "Phone"
+        ],
+        "contribution": 5000
+      },
+      "expected": {
+        "Laptop": 5000,
+        "Phone": 0,
+        "unallocated": 0
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal priorities",
+        "shared surplus",
+        "remaining targets",
+        "contribution dates for deadline feasibility"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_split",
+        "language": "en",
+        "from": "2026-01-01",
+        "until": "2026-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 13,
+      "question": "If I choose a cheaper phone, how much earlier can I reach my savings goal?",
+      "intent": "Cheaper phone target supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_timeline",
+        "target": 20000,
+        "saved": 5000,
+        "contribution": 2500,
+        "frequency": "monthly"
+      },
+      "expected": {
+        "remaining": 15000,
+        "periods": 6,
+        "completionDate": null
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "affordable contribution and frequency",
+        "first contribution date for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_timeline",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 14,
+      "question": "How much extra income would I need to afford this purchase within three months?",
+      "intent": "Additional monthly saving required for three-month purchase",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 60000,
+        "saved": 20000,
+        "periods": 3,
+        "contribution": 4000
+      },
+      "expected": {
+        "required": 13333.34,
+        "extraRequired": 9333.34
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 15,
+      "question": "What is the maximum amount I can spend on a birthday gift this month?",
+      "intent": "Birthday gift maximum",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 16,
+      "question": "How much can I safely spend today?",
+      "intent": "Discretionary cash today after upcoming needs",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 17,
+      "question": "Will my remaining balance last until my next payday?",
+      "intent": "Cash runway until confirmed payday",
+      "completeInput": {
+        "language": "en",
+        "operation": "daily_limit"
+      },
+      "expected": {
+        "available": 36800,
+        "dailyLimit": 5257.14
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "daily_limit",
+        "language": "en",
+        "frequency": "payday"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 18,
+      "question": "How much should I limit my daily spending to make my money last?",
+      "intent": "Daily discretionary limit",
+      "completeInput": {
+        "language": "en",
+        "operation": "daily_limit"
+      },
+      "expected": {
+        "dailyLimit": 5257.14
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "daily_limit",
+        "language": "en",
+        "frequency": "daily"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 19,
+      "question": "After setting aside my upcoming bills, how much money is available?",
+      "intent": "Cash after bills and protected needs",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 20,
+      "question": "Can I afford to eat out tonight?",
+      "intent": "Eating out with explicit meal quote",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 500
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 36300,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 21,
+      "question": "If I spend ₱500 today, how much will I have left for the rest of the week?",
+      "intent": "Spending five hundred today",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 500
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 36300,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en",
+        "purchase": 500
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 22,
+      "question": "How much can I spend this weekend without exceeding my budget?",
+      "intent": "Weekend cash envelope, current commitments included",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en",
+        "from": "2026-10-05",
+        "until": "2026-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 23,
+      "question": "Why does my money run out before payday?",
+      "intent": "Review largest recorded spending before payday",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 5100,
+        "largestCategory": "Food & Dining",
+        "largestAmount": 2000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en",
+        "frequency": "payday"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 24,
+      "question": "How much have I spent since my last payday?",
+      "intent": "Spending since confirmed last payday",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 5100
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en",
+        "frequency": "payday"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 25,
+      "question": "Which purchases used up most of my money this week?",
+      "intent": "Largest categories this week; no merchant-purpose inference",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "from": "2026-10-05",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 1500,
+        "largestCategory": "Bills"
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en",
+        "from": "2026-10-05",
+        "until": "2026-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 26,
+      "question": "Am I spending faster than I planned this month?",
+      "intent": "Monthly spending against chosen limit",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_review"
+      },
+      "expected": {
+        "target": 10000,
+        "spent": 5100,
+        "remaining": 4900
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "monthly budget",
+        "recorded spending and coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending",
+        "income"
+      ],
+      "missingInput": {
+        "operation": "budget_review",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 27,
+      "question": "Can I afford a ₱1,000 shopping trip today?",
+      "intent": "Shopping trip affordability",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 1000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 35800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en",
+        "purchase": 1000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 28,
+      "question": "How much should I keep untouched until my next income arrives?",
+      "intent": "Protected money and needs through payday",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 29,
+      "question": "If my payday is delayed by one week, will my money still last?",
+      "intent": "Payday delayed a week; recalculate costs through new date",
+      "completeInput": {
+        "language": "en",
+        "operation": "daily_limit",
+        "nextPayday": "2026-10-22"
+      },
+      "expected": {
+        "available": 36100,
+        "dailyLimit": 2578.57
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "daily_limit",
+        "language": "en",
+        "frequency": "payday"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 30,
+      "question": "What daily spending limit would let me save ₱2,000 this month?",
+      "intent": "Protect an extra two thousand for saving before daily allowance",
+      "completeInput": {
+        "language": "en",
+        "operation": "daily_limit",
+        "newSaving": 2000
+      },
+      "expected": {
+        "available": 34800,
+        "dailyLimit": 4971.42
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "daily_limit",
+        "language": "en",
+        "newSaving": 2000,
+        "frequency": "daily"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 31,
+      "question": "If I save ₱100 every day, when will I reach ₱20,000?",
+      "intent": "Daily contributions with actual first date",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_timeline",
+        "target": 20000,
+        "saved": 0,
+        "contribution": 100,
+        "frequency": "daily",
+        "schedule": {
+          "frequency": "daily",
+          "first": "2026-10-09"
+        }
+      },
+      "expected": {
+        "periods": 200,
+        "completionDate": "2027-04-26"
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "affordable contribution and frequency",
+        "first contribution date for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_timeline",
+        "language": "en",
+        "target": 20000,
+        "contribution": 100,
+        "frequency": "daily"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 32,
+      "question": "How much should I save weekly to reach ₱30,000 in six months?",
+      "intent": "Weekly dates over six calendar months",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 30000,
+        "saved": 0,
+        "until": "2027-04-08",
+        "schedule": {
+          "frequency": "weekly",
+          "first": "2026-10-09"
+        }
+      },
+      "expected": {
+        "contributions": 26,
+        "required": 1153.85
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "target": 30000,
+        "until": "2027-04-08",
+        "frequency": "weekly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 33,
+      "question": "When will I reach my savings goal at my current pace?",
+      "intent": "Current recorded Laptop allocation",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_timeline",
+        "goalNames": [
+          "Laptop"
+        ]
+      },
+      "expected": {
+        "remaining": 40000,
+        "periods": 10
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "affordable contribution and frequency",
+        "first contribution date for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_timeline",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 34,
+      "question": "Am I on track to complete my goal before its deadline?",
+      "intent": "Contribution required for supplied goal deadline",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "goalNames": [
+          "Laptop"
+        ],
+        "periods": 8
+      },
+      "expected": {
+        "required": 5000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 35,
+      "question": "How much more do I need to save each month to finish two months earlier?",
+      "intent": "Finish two periods earlier than recorded ten-period plan",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "goalNames": [
+          "Laptop"
+        ],
+        "periods": 8
+      },
+      "expected": {
+        "required": 5000,
+        "extraRequired": 1000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 36,
+      "question": "If I skip saving this month, how much will my goal be delayed?",
+      "intent": "Skip one monthly contribution",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Laptop"
+        ],
+        "skipPeriods": 1
+      },
+      "expected": {
+        "periods": 10,
+        "periodsSaved": -1
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 37,
+      "question": "How should I divide my savings between a laptop and an emergency fund?",
+      "intent": "Prioritize emergency goal without double-allocating surplus",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_split",
+        "goalNames": [
+          "Emergency",
+          "Laptop"
+        ],
+        "contribution": 5000
+      },
+      "expected": {
+        "Emergency": 5000,
+        "Laptop": 0
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal priorities",
+        "shared surplus",
+        "remaining targets",
+        "contribution dates for deadline feasibility"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_split",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 38,
+      "question": "Which of my savings goals can I realistically finish this year?",
+      "intent": "Competing goals require selected priority and shared funds",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_split",
+        "goalNames": [
+          "Laptop",
+          "Phone"
+        ],
+        "contribution": 10000
+      },
+      "expected": {
+        "Laptop": 10000,
+        "Phone": 0
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal priorities",
+        "shared surplus",
+        "remaining targets",
+        "contribution dates for deadline feasibility"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_split",
+        "language": "en",
+        "from": "2026-01-01",
+        "until": "2026-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 39,
+      "question": "Is my current savings target realistic for my income?",
+      "intent": "Required contribution compared with current allocation",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "goalNames": [
+          "Laptop"
+        ],
+        "periods": 5
+      },
+      "expected": {
+        "required": 8000,
+        "extraRequired": 4000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 40,
+      "question": "How much can I save without making my daily budget too tight?",
+      "intent": "Potential saving after protected daily needs",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en",
+        "frequency": "daily"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 41,
+      "question": "If I receive a ₱5,000 bonus, how much closer will I be to my goal?",
+      "intent": "One-time bonus explicitly assigned to Laptop saved balance",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Laptop"
+        ],
+        "bonus": 5000
+      },
+      "expected": {
+        "remaining": 35000,
+        "periods": 9,
+        "periodsSaved": 1
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en",
+        "bonus": 5000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 42,
+      "question": "How much should I save each payday for Christmas expenses?",
+      "intent": "Christmas payday contributions with six dates supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 12000,
+        "saved": 0,
+        "periods": 6
+      },
+      "expected": {
+        "required": 2000,
+        "contributions": 6
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "frequency": "payday"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 43,
+      "question": "Can I reach ₱100,000 in savings within two years?",
+      "intent": "Two-year saving target with 24 monthly dates supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 100000,
+        "saved": 20000,
+        "periods": 24
+      },
+      "expected": {
+        "required": 3333.34,
+        "contributions": 24
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "target": 100000,
+        "until": "2028-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 44,
+      "question": "If I increase my monthly savings by ₱500, when will I finish my goal?",
+      "intent": "Additional monthly contribution follow-up",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Laptop"
+        ],
+        "delta": 500
+      },
+      "expected": {
+        "remaining": 40000,
+        "periods": 9,
+        "periodsSaved": 1
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en",
+        "delta": 500,
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 45,
+      "question": "How should I adjust my savings plan after withdrawing ₱3,000?",
+      "intent": "Withdrawal reduces saved goal amount",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Laptop"
+        ],
+        "withdrawal": 3000
+      },
+      "expected": {
+        "remaining": 43000,
+        "periods": 11
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en",
+        "withdrawal": 3000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 46,
+      "question": "How should I divide my monthly income among bills, food, transportation, and savings?",
+      "intent": "Essential needs before discretionary allocation",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 30000
+      },
+      "expected": {
+        "income": 30000,
+        "essentials": 5600,
+        "afterEssentials": 24400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 47,
+      "question": "Is my current budget realistic based on my actual expenses?",
+      "intent": "Budget realism against actual spending",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_review"
+      },
+      "expected": {
+        "target": 10000,
+        "spent": 5100,
+        "remaining": 4900
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "monthly budget",
+        "recorded spending and coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending",
+        "income"
+      ],
+      "missingInput": {
+        "operation": "budget_review",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 48,
+      "question": "Which budget categories should I adjust next month?",
+      "intent": "Categories to inspect before adjusting next month",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 5100,
+        "largestCategory": "Food & Dining",
+        "largestAmount": 2000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 49,
+      "question": "How much should I budget for groceries based on my past spending?",
+      "intent": "Grocery proxy only when the user selects Food & Dining",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "category": "Food & Dining",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 2000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 50,
+      "question": "Can I still save money with a monthly income of ₱10,000?",
+      "intent": "Ten-thousand hypothetical income",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 10000
+      },
+      "expected": {
+        "income": 10000,
+        "essentials": 5600,
+        "afterEssentials": 4400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 51,
+      "question": "How should I budget when my income changes every month?",
+      "intent": "Irregular earned income history",
+      "completeInput": {
+        "language": "en",
+        "operation": "income_history"
+      },
+      "expected": {
+        "lowestRecordedMonth": 25000,
+        "averageRecordedMonth": 27500,
+        "months": 2
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "at least two completed comparable income months",
+        "history coverage"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "income_history",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 52,
+      "question": "What budget can I follow during a low-income month?",
+      "intent": "User-supplied low-income scenario",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 10000
+      },
+      "expected": {
+        "income": 10000,
+        "essentials": 5600,
+        "afterEssentials": 4400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 53,
+      "question": "How should I allocate an unexpected ₱8,000 payment?",
+      "intent": "Unexpected received payment as hypothetical allocation",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 8000
+      },
+      "expected": {
+        "income": 8000,
+        "essentials": 5600,
+        "afterEssentials": 2400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en",
+        "income": 8000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 54,
+      "question": "If my salary increases by ₱3,000, how much of the increase can I save?",
+      "intent": "Salary increase scenario",
+      "completeInput": {
+        "language": "en",
+        "operation": "income_change",
+        "incomeDelta": 3000
+      },
+      "expected": {
+        "income": 33000,
+        "afterEssentials": 27400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "baseline income",
+        "stated change",
+        "essential costs",
+        "bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "income_change",
+        "language": "en",
+        "incomeDelta": 3000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 55,
+      "question": "How should I adjust my budget if my income drops by 20%?",
+      "intent": "Twenty-percent income decrease scenario",
+      "completeInput": {
+        "language": "en",
+        "operation": "income_change",
+        "incomePercent": -20
+      },
+      "expected": {
+        "income": 24000,
+        "afterEssentials": 18400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "baseline income",
+        "stated change",
+        "essential costs",
+        "bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "income_change",
+        "language": "en",
+        "incomePercent": -20
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 56,
+      "question": "Which expenses should I prioritize when I cannot pay for everything?",
+      "intent": "Prioritize essentials in a shortfall",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 5000
+      },
+      "expected": {
+        "income": 5000,
+        "essentials": 5600,
+        "afterEssentials": -600
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 57,
+      "question": "How much of my income goes toward essential expenses?",
+      "intent": "Essential monthly costs and due commitments",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 30000
+      },
+      "expected": {
+        "income": 30000,
+        "essentials": 5600,
+        "afterEssentials": 24400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 58,
+      "question": "How much money remains after covering my basic needs?",
+      "intent": "Income after essential needs",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 30000
+      },
+      "expected": {
+        "income": 30000,
+        "essentials": 5600,
+        "afterEssentials": 24400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 59,
+      "question": "Should I base my budget on my average income or my lowest-income month?",
+      "intent": "Lowest and average completed income months",
+      "completeInput": {
+        "language": "en",
+        "operation": "income_history"
+      },
+      "expected": {
+        "lowestRecordedMonth": 25000,
+        "averageRecordedMonth": 27500
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "at least two completed comparable income months",
+        "history coverage"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "income_history",
+        "language": "en",
+        "lent": false
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 60,
+      "question": "Can you help me plan how to use my next paycheck?",
+      "intent": "Next paycheck allocation with supplied monthly scenario",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 15000
+      },
+      "expected": {
+        "income": 15000,
+        "essentials": 5600,
+        "afterEssentials": 9400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 61,
+      "question": "How should I divide my ₱1,000 weekly allowance?",
+      "intent": "Weekly allowance split",
+      "completeInput": {
+        "language": "en",
+        "operation": "school_budget",
+        "income": 1000,
+        "schoolDays": 5,
+        "dailyFood": 100,
+        "dailyTransport": 40,
+        "otherCosts": 0
+      },
+      "expected": {
+        "costs": 700,
+        "remaining": 300
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "allowance or part-time income",
+        "actual school days",
+        "daily food",
+        "return fare",
+        "other school costs"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "school_budget",
+        "language": "en",
+        "income": 1000,
+        "frequency": "weekly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 62,
+      "question": "Will my allowance cover food and transportation for five school days?",
+      "intent": "Five actual school days with supplied food and fares",
+      "completeInput": {
+        "language": "en",
+        "operation": "school_budget",
+        "income": 1000,
+        "schoolDays": 5,
+        "dailyFood": 100,
+        "dailyTransport": 40,
+        "otherCosts": 0
+      },
+      "expected": {
+        "costs": 700,
+        "remaining": 300
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "allowance or part-time income",
+        "actual school days",
+        "daily food",
+        "return fare",
+        "other school costs"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "school_budget",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 63,
+      "question": "How much can I save from my allowance each week?",
+      "intent": "Weekly saving remainder after school needs",
+      "completeInput": {
+        "language": "en",
+        "operation": "school_budget",
+        "income": 1000,
+        "schoolDays": 5,
+        "dailyFood": 100,
+        "dailyTransport": 40,
+        "otherCosts": 0
+      },
+      "expected": {
+        "costs": 700,
+        "remaining": 300
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "allowance or part-time income",
+        "actual school days",
+        "daily food",
+        "return fare",
+        "other school costs"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "school_budget",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 64,
+      "question": "Can I afford a ₱2,500 school project this month?",
+      "intent": "School project affordability",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 2500
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 34300,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en",
+        "purchase": 2500
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 65,
+      "question": "How much should I set aside weekly for printing and school supplies?",
+      "intent": "Printing target and four weekly contributions supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 1000,
+        "saved": 0,
+        "periods": 4
+      },
+      "expected": {
+        "required": 250,
+        "contributions": 4
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "frequency": "weekly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 66,
+      "question": "Can I save for a laptop using only my allowance?",
+      "intent": "Laptop saving from explicit weekly allowance surplus",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_timeline",
+        "target": 50000,
+        "saved": 10000,
+        "contribution": 300,
+        "frequency": "monthly"
+      },
+      "expected": {
+        "remaining": 40000,
+        "periods": 134,
+        "completionDate": null
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "affordable contribution and frequency",
+        "first contribution date for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_timeline",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 67,
+      "question": "If I spend ₱150 on food every school day, how much will remain from my allowance?",
+      "intent": "Food at one hundred fifty per school day",
+      "completeInput": {
+        "language": "en",
+        "operation": "school_budget",
+        "income": 1000,
+        "schoolDays": 5,
+        "dailyFood": 150,
+        "dailyTransport": 40,
+        "otherCosts": 0
+      },
+      "expected": {
+        "costs": 950,
+        "remaining": 50
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "allowance or part-time income",
+        "actual school days",
+        "daily food",
+        "return fare",
+        "other school costs"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "school_budget",
+        "language": "en",
+        "income": 150
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 68,
+      "question": "How should I adjust my allowance budget during exam week?",
+      "intent": "Exam-week actual five-day scenario with higher food",
+      "completeInput": {
+        "language": "en",
+        "operation": "school_budget",
+        "income": 1000,
+        "schoolDays": 5,
+        "dailyFood": 120,
+        "dailyTransport": 40,
+        "otherCosts": 0
+      },
+      "expected": {
+        "costs": 800,
+        "remaining": 200
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "allowance or part-time income",
+        "actual school days",
+        "daily food",
+        "return fare",
+        "other school costs"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "school_budget",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 69,
+      "question": "Can I afford to join a school trip without using my tuition savings?",
+      "intent": "School trip with tuition reserve protected",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 5000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 31800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 70,
+      "question": "How much do I need to save before the next enrollment?",
+      "intent": "Enrollment target and four supplied contribution dates",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 20000,
+        "saved": 5000,
+        "periods": 4
+      },
+      "expected": {
+        "required": 3750,
+        "contributions": 4
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 71,
+      "question": "How much does commuting to school cost me each month?",
+      "intent": "Actual recorded transport costs, not invented school attendance",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "category": "Transport",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 1000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 72,
+      "question": "Would bringing packed meals help me reach my savings goal faster?",
+      "intent": "Packed meal estimate uses stated meal and replacement cost",
+      "completeInput": {
+        "language": "en",
+        "operation": "spending_cut",
+        "unitCost": 150,
+        "replacementCost": 70,
+        "weekdays": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "from": "2026-10-05",
+        "until": "2026-10-09"
+      },
+      "expected": {
+        "occurrences": 5,
+        "saving": 400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "category and reduction percentage OR unit/replacement costs and weekdays/date range"
+      ],
+      "tools": [
+        "summary",
+        "spending",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "spending_cut",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 73,
+      "question": "Can my part-time income cover my school expenses?",
+      "intent": "Part-time income against school costs",
+      "completeInput": {
+        "language": "en",
+        "operation": "school_budget",
+        "income": 800,
+        "schoolDays": 5,
+        "dailyFood": 100,
+        "dailyTransport": 40,
+        "otherCosts": 0
+      },
+      "expected": {
+        "costs": 700,
+        "remaining": 100
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "allowance or part-time income",
+        "actual school days",
+        "daily food",
+        "return fare",
+        "other school costs"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "school_budget",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 74,
+      "question": "How should I budget for my OJT transportation and meals?",
+      "intent": "OJT actual-day meal and fare plan",
+      "completeInput": {
+        "language": "en",
+        "operation": "school_budget",
+        "income": 1000,
+        "schoolDays": 5,
+        "dailyFood": 100,
+        "dailyTransport": 40,
+        "otherCosts": 0
+      },
+      "expected": {
+        "costs": 700,
+        "remaining": 300
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "allowance or part-time income",
+        "actual school days",
+        "daily food",
+        "return fare",
+        "other school costs"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "school_budget",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 75,
+      "question": "If my allowance arrives late, how can I make my remaining money last?",
+      "intent": "Late allowance with fourteen-day confirmed horizon",
+      "completeInput": {
+        "language": "en",
+        "operation": "daily_limit",
+        "nextPayday": "2026-10-22"
+      },
+      "expected": {
+        "dailyLimit": 2578.57
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "daily_limit",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 76,
+      "question": "Do I have enough money to cover all bills due before payday?",
+      "intent": "Bills and debt due before payday",
+      "completeInput": {
+        "language": "en",
+        "operation": "bill_reserve",
+        "until": "2026-10-15"
+      },
+      "expected": {
+        "bills": 2000,
+        "debts": 500,
+        "totalReserved": 2500
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "unpaid bills/debts",
+        "due dates",
+        "horizon"
+      ],
+      "tools": [
+        "summary",
+        "obligations",
+        "debts"
+      ],
+      "missingInput": {
+        "operation": "bill_reserve",
+        "language": "en",
+        "frequency": "payday"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 77,
+      "question": "How much should I reserve for rent, electricity, water, and internet?",
+      "intent": "Current recorded unpaid bill reserve",
+      "completeInput": {
+        "language": "en",
+        "operation": "bill_reserve",
+        "until": "2026-10-15"
+      },
+      "expected": {
+        "bills": 2000,
+        "debts": 500,
+        "totalReserved": 2500
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "unpaid bills/debts",
+        "due dates",
+        "horizon"
+      ],
+      "tools": [
+        "summary",
+        "obligations",
+        "debts"
+      ],
+      "missingInput": {
+        "operation": "bill_reserve",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 78,
+      "question": "Which bills are due this week?",
+      "intent": "Bills due this week through Monday exclusive",
+      "completeInput": {
+        "language": "en",
+        "operation": "bill_reserve",
+        "until": "2026-10-12"
+      },
+      "expected": {
+        "bills": 2000,
+        "debts": 0
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "unpaid bills/debts",
+        "due dates",
+        "horizon"
+      ],
+      "tools": [
+        "summary",
+        "obligations",
+        "debts"
+      ],
+      "missingInput": {
+        "operation": "bill_reserve",
+        "language": "en",
+        "from": "2026-10-05",
+        "until": "2026-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 79,
+      "question": "How much do my subscriptions cost altogether each month?",
+      "intent": "Recurring bill monthly equivalents; explicit bill selected",
+      "completeInput": {
+        "language": "en",
+        "operation": "bill_cost",
+        "billNames": [
+          "Rent"
+        ]
+      },
+      "expected": {
+        "monthlyEquivalent": 3000,
+        "yearlyEquivalent": 36000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected recurring bill amounts and frequencies"
+      ],
+      "tools": [
+        "summary",
+        "obligations",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "bill_cost",
+        "language": "en",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 80,
+      "question": "Which subscriptions have increased my recurring expenses the most?",
+      "intent": "Recorded billing comparison cannot invent old subscription prices",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "category": "Bills",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 1000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 81,
+      "question": "If I cancel two subscriptions, how much could I save in one year?",
+      "intent": "Cancel selected bills; annual equivalent illustration",
+      "completeInput": {
+        "language": "en",
+        "operation": "bill_cost",
+        "billNames": [
+          "Rent"
+        ]
+      },
+      "expected": {
+        "yearlyEquivalent": 36000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected recurring bill amounts and frequencies"
+      ],
+      "tools": [
+        "summary",
+        "obligations",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "bill_cost",
+        "language": "en",
+        "until": "2027-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 82,
+      "question": "Can I afford a new ₱999 monthly subscription?",
+      "intent": "Monthly subscription increases recurring cost",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "expenseDelta": 999
+      },
+      "expected": {
+        "income": 30000,
+        "essentials": 6599,
+        "afterEssentials": 23401
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en",
+        "expenseDelta": 999,
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 83,
+      "question": "If my electricity bill rises by ₱800, how should I adjust my budget?",
+      "intent": "Higher bill reduces monthly scenario remainder",
+      "completeInput": {
+        "language": "en",
+        "operation": "income_change",
+        "expenseDelta": 800
+      },
+      "expected": {
+        "income": 30000,
+        "essentials": 6400,
+        "afterEssentials": 23600
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "baseline income",
+        "stated change",
+        "essential costs",
+        "bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "income_change",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 84,
+      "question": "How much should I save monthly for an annual payment?",
+      "intent": "Annual payment over supplied twelve saving dates",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 12000,
+        "saved": 0,
+        "periods": 12
+      },
+      "expected": {
+        "required": 1000,
+        "contributions": 12
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 85,
+      "question": "Will I have enough for my bills if I make this purchase today?",
+      "intent": "Purchase with upcoming bills protected",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 30000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 6800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 86,
+      "question": "How much of my salary is already committed to recurring payments?",
+      "intent": "Income commitments recorded before payday",
+      "completeInput": {
+        "language": "en",
+        "operation": "bill_reserve",
+        "until": "2026-10-15"
+      },
+      "expected": {
+        "bills": 2000,
+        "debts": 500,
+        "totalReserved": 2500
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "unpaid bills/debts",
+        "due dates",
+        "horizon"
+      ],
+      "tools": [
+        "summary",
+        "obligations",
+        "debts"
+      ],
+      "missingInput": {
+        "operation": "bill_reserve",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 87,
+      "question": "Can I cover next month’s rent if I receive less income this month?",
+      "intent": "Lower income while rent remains due",
+      "completeInput": {
+        "language": "en",
+        "operation": "income_change",
+        "incomePercent": -20
+      },
+      "expected": {
+        "income": 24000,
+        "essentials": 5600
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "baseline income",
+        "stated change",
+        "essential costs",
+        "bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "income_change",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 88,
+      "question": "How can I spread out saving for bills that fall due on the same week?",
+      "intent": "Save across four dates for coincident bills",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 4000,
+        "saved": 0,
+        "periods": 4
+      },
+      "expected": {
+        "required": 1000,
+        "contributions": 4
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 89,
+      "question": "Which recurring expenses can I reduce?",
+      "intent": "Recurring amounts for selected bills, no automatic cancellations",
+      "completeInput": {
+        "language": "en",
+        "operation": "bill_cost",
+        "billNames": [
+          "Rent"
+        ]
+      },
+      "expected": {
+        "monthlyEquivalent": 3000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected recurring bill amounts and frequencies"
+      ],
+      "tools": [
+        "summary",
+        "obligations",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "bill_cost",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 90,
+      "question": "Have I set aside enough money for bills that I have not paid yet?",
+      "intent": "Unpaid bill reserves",
+      "completeInput": {
+        "language": "en",
+        "operation": "bill_reserve",
+        "until": "2026-10-15"
+      },
+      "expected": {
+        "bills": 2000,
+        "debts": 500,
+        "totalReserved": 2500
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "unpaid bills/debts",
+        "due dates",
+        "horizon"
+      ],
+      "tools": [
+        "summary",
+        "obligations",
+        "debts"
+      ],
+      "missingInput": {
+        "operation": "bill_reserve",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 91,
+      "question": "How long will it take to pay off my debt if I pay ₱1,500 each month?",
+      "intent": "Debt payoff with explicitly supplied no-interest terms",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_payoff",
+        "payment": 1500,
+        "frequency": "monthly",
+        "interestType": "interest_free",
+        "feePerPeriod": 0
+      },
+      "expected": {
+        "periods": 8,
+        "total": 12000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected principal",
+        "payment",
+        "interest type",
+        "rate per period",
+        "fees",
+        "frequency"
+      ],
+      "tools": [
+        "summary",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "debt_payoff",
+        "language": "en",
+        "frequency": "monthly",
+        "payment": 1500
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 92,
+      "question": "How much should I pay monthly to clear my loan within one year?",
+      "intent": "Interest-free loan deadline with twelve payments",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_payoff",
+        "periods": 12,
+        "interestType": "interest_free",
+        "frequency": "monthly",
+        "feePerPeriod": 0
+      },
+      "expected": {
+        "payment": 1000,
+        "periods": 12,
+        "total": 12000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected principal",
+        "payment",
+        "interest type",
+        "rate per period",
+        "fees",
+        "frequency"
+      ],
+      "tools": [
+        "summary",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "debt_payoff",
+        "language": "en",
+        "until": "2027-10-08",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 93,
+      "question": "Can I afford a ₱2,000 monthly phone installment?",
+      "intent": "Monthly installment increases recurring commitments",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "expenseDelta": 2000
+      },
+      "expected": {
+        "income": 30000,
+        "essentials": 7600,
+        "afterEssentials": 22400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en",
+        "expenseDelta": 2000,
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 94,
+      "question": "How much will remain from my income after all debt payments?",
+      "intent": "Received income after paid and upcoming current-period debt payments",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_budget"
+      },
+      "expected": {
+        "receivedIncome": 30000,
+        "paid": 500,
+        "upcoming": 500,
+        "afterDebt": 29000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "received period income",
+        "recorded debt payments",
+        "outstanding debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "debts",
+        "spending",
+        "obligations",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "debt_budget",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 95,
+      "question": "If I pay an extra ₱500 monthly, how much earlier can I finish my loan?",
+      "intent": "Compare five-hundred extra against base payment",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_compare",
+        "payment": 1500,
+        "delta": 500,
+        "frequency": "monthly",
+        "interestType": "interest_free",
+        "feePerPeriod": 0
+      },
+      "expected": {
+        "periods": 8,
+        "fasterPeriods": 6,
+        "periodsSaved": 2
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected principal",
+        "base and extra payments",
+        "interest type",
+        "rate per period",
+        "fees",
+        "frequency"
+      ],
+      "tools": [
+        "summary",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "debt_compare",
+        "language": "en",
+        "delta": 500,
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 96,
+      "question": "Which debt should I prioritize based on interest rates and due dates?",
+      "intent": "Interest-bearing terms must be supplied before priority illustration",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_payoff",
+        "payment": 1500,
+        "frequency": "monthly",
+        "interestType": "reducing",
+        "rateBpsPerPeriod": 100,
+        "feePerPeriod": 0
+      },
+      "expected": {
+        "periods": 9
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected principal",
+        "payment",
+        "interest type",
+        "rate per period",
+        "fees",
+        "frequency"
+      ],
+      "tools": [
+        "summary",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "debt_payoff",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 97,
+      "question": "Can I repay my debt while still building an emergency fund?",
+      "intent": "Monthly essential needs include debt repayment before saving for emergencies",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 30000
+      },
+      "expected": {
+        "income": 30000,
+        "essentials": 5600,
+        "afterEssentials": 24400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 98,
+      "question": "What happens to my budget if I take another loan?",
+      "intent": "Additional loan principal and terms as an explicit scenario",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_payoff",
+        "payment": 1500,
+        "frequency": "monthly",
+        "interestType": "interest_free",
+        "feePerPeriod": 0
+      },
+      "expected": {
+        "periods": 8,
+        "total": 12000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected principal",
+        "payment",
+        "interest type",
+        "rate per period",
+        "fees",
+        "frequency"
+      ],
+      "tools": [
+        "summary",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "debt_payoff",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 99,
+      "question": "What is the total cost of this installment plan, including interest and fees?",
+      "intent": "Installment cost with flat one-percent periodic interest and fee",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_payoff",
+        "target": 12000,
+        "payment": 1500,
+        "frequency": "monthly",
+        "interestType": "flat",
+        "rateBpsPerPeriod": 100,
+        "feePerPeriod": 30
+      },
+      "expected": {
+        "periods": 9,
+        "total": 13350,
+        "interest": 1080
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected principal",
+        "payment",
+        "interest type",
+        "rate per period",
+        "fees",
+        "frequency"
+      ],
+      "tools": [
+        "summary",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "debt_payoff",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 100,
+      "question": "Would paying in cash or through installments fit my finances better?",
+      "intent": "Cash versus stated installment total for same purchase",
+      "completeInput": {
+        "language": "en",
+        "operation": "cost_plan",
+        "target": 13350,
+        "alternativeCost": 12000
+      },
+      "expected": {
+        "difference": 1350
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "complete first scenario costs",
+        "comparable alternative costs",
+        "same period"
+      ],
+      "tools": [
+        "summary",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cost_plan",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 101,
+      "question": "Can I afford to lend a friend ₱3,000?",
+      "intent": "Lending removes current accessible money",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 3000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 33800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en",
+        "purchase": 3000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 102,
+      "question": "If my friend repays me late, can I still cover my bills?",
+      "intent": "Late friend repayment is excluded from available cash",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 103,
+      "question": "How much borrowed money do I still owe?",
+      "intent": "Borrowed principal total",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_totals"
+      },
+      "expected": {
+        "remaining": 12000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "authenticated owner borrowed/lent records"
+      ],
+      "tools": [
+        "summary",
+        "debts"
+      ],
+      "missingInput": {
+        "operation": "debt_totals",
+        "language": "en",
+        "lent": false
+      },
+      "expectedMissingBehavior": "report recorded zero with unrecorded-data caveat"
+    },
+    {
+      "id": 104,
+      "question": "How much money have I lent that has not been repaid?",
+      "intent": "Lent principal remaining; not earned income",
+      "completeInput": {
+        "language": "en",
+        "operation": "debt_totals",
+        "lent": true
+      },
+      "expected": {
+        "remaining": 3000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "authenticated owner borrowed/lent records"
+      ],
+      "tools": [
+        "summary",
+        "debts"
+      ],
+      "missingInput": {
+        "operation": "debt_totals",
+        "language": "en",
+        "lent": true
+      },
+      "expectedMissingBehavior": "report recorded zero with unrecorded-data caveat"
+    },
+    {
+      "id": 105,
+      "question": "If I use my bonus to pay debt, how will that affect my savings goals?",
+      "intent": "A bonus used for debt is not also allocated to a goal",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Laptop"
+        ],
+        "bonus": 5000,
+        "bonusToDebt": 5000
+      },
+      "expected": {
+        "remaining": 40000,
+        "periods": 10,
+        "delayComparedWithSavingBonus": 1
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 106,
+      "question": "How much should my emergency fund cover based on my essential expenses?",
+      "intent": "Three-month emergency target counts actual days and future installments",
+      "completeInput": {
+        "language": "en",
+        "operation": "emergency_cover",
+        "emergencyMonths": 3
+      },
+      "expected": {
+        "monthlyEssentials": 5600,
+        "target": 18700
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "essential daily costs",
+        "bill/debt schedule",
+        "user-chosen reserve months"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "goals",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "emergency_cover",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 107,
+      "question": "If I lose my income today, how long will my savings last?",
+      "intent": "Accessible emergency reserve without future income",
+      "completeInput": {
+        "language": "en",
+        "operation": "runway",
+        "saved": 20000
+      },
+      "expected": {
+        "monthlyEssentials": 5600,
+        "months": 3
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible emergency reserve",
+        "essential costs",
+        "bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "runway",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 108,
+      "question": "Can I handle an unexpected ₱5,000 expense?",
+      "intent": "Unexpected five-thousand expense",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 5000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 31800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en",
+        "purchase": 5000
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 109,
+      "question": "How should I adjust my budget after an emergency withdrawal?",
+      "intent": "Emergency withdrawal rebuild plan",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Emergency"
+        ],
+        "withdrawal": 3000
+      },
+      "expected": {
+        "remaining": 63000,
+        "periods": 16
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 110,
+      "question": "How long will it take to rebuild my emergency savings?",
+      "intent": "Emergency rebuilding at recorded allocation",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_timeline",
+        "goalNames": [
+          "Emergency"
+        ]
+      },
+      "expected": {
+        "remaining": 60000,
+        "periods": 15
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "affordable contribution and frequency",
+        "first contribution date for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_timeline",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 111,
+      "question": "If I miss two weeks of work, can I still pay my bills?",
+      "intent": "No work income for two weeks; supplied late-pay horizon",
+      "completeInput": {
+        "language": "en",
+        "operation": "daily_limit",
+        "nextPayday": "2026-10-22"
+      },
+      "expected": {
+        "available": 36100
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "daily_limit",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 112,
+      "question": "What expenses can I temporarily reduce during an emergency?",
+      "intent": "Largest categories to inspect without reducing essentials blindly",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 5100,
+        "largestCategory": "Food & Dining",
+        "largestAmount": 2000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 113,
+      "question": "Can I cover a sudden repair without borrowing money?",
+      "intent": "Repair affordability with supplemental quote",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 5000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 31800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 114,
+      "question": "How much should I keep available for unexpected school or work expenses?",
+      "intent": "One-month emergency illustration, not universal advice",
+      "completeInput": {
+        "language": "en",
+        "operation": "emergency_cover",
+        "emergencyMonths": 1
+      },
+      "expected": {
+        "target": 5600
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "essential daily costs",
+        "bill/debt schedule",
+        "user-chosen reserve months"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "goals",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "emergency_cover",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 115,
+      "question": "If an emergency happens this month, which savings goals will be delayed?",
+      "intent": "Emergency expense from explicitly selected savings goal",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Laptop"
+        ],
+        "withdrawal": 5000
+      },
+      "expected": {
+        "remaining": 45000,
+        "periods": 12
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 116,
+      "question": "How would one month without income affect my financial situation?",
+      "intent": "One month with no income scenario",
+      "completeInput": {
+        "language": "en",
+        "operation": "income_change",
+        "incomePercent": -100
+      },
+      "expected": {
+        "income": 0,
+        "afterEssentials": -5600
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "baseline income",
+        "stated change",
+        "essential costs",
+        "bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "income_change",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 117,
+      "question": "What would happen if my essential expenses increased by 15%?",
+      "intent": "Fifteen-percent rise in all essential costs",
+      "completeInput": {
+        "language": "en",
+        "operation": "income_change",
+        "expensePercent": 15
+      },
+      "expected": {
+        "essentials": 6440,
+        "afterEssentials": 23560
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "baseline income",
+        "stated change",
+        "essential costs",
+        "bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "income_change",
+        "language": "en",
+        "expensePercent": 15
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 118,
+      "question": "Can I support a family member financially without falling short myself?",
+      "intent": "Family support with supplemental amount",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 5000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 31800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 119,
+      "question": "How much emergency money can I build over the next six months?",
+      "intent": "Six-month emergency contribution requirement",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 24000,
+        "saved": 0,
+        "periods": 6
+      },
+      "expected": {
+        "required": 4000,
+        "contributions": 6
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 120,
+      "question": "Do I have enough accessible money for an emergency, separate from my other goals?",
+      "intent": "Accessible cash excludes investments and saved goal balances",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 121,
+      "question": "Can I afford a three-day vacation based on my current finances?",
+      "intent": "Three-day trip with supplied total quote",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 10000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 26800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 122,
+      "question": "How much should I save monthly for a ₱25,000 trip?",
+      "intent": "Trip saving with ten contribution dates supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 25000,
+        "saved": 0,
+        "periods": 10
+      },
+      "expected": {
+        "required": 2500,
+        "contributions": 10
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en",
+        "target": 25000,
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 123,
+      "question": "What travel budget can I afford without delaying my bills?",
+      "intent": "Travel budget after due commitments",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 124,
+      "question": "Can I afford a vacation and a new phone in the same year?",
+      "intent": "Vacation and phone compete for the same contribution",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_split",
+        "goalNames": [
+          "Laptop",
+          "Phone"
+        ],
+        "contribution": 5000
+      },
+      "expected": {
+        "Laptop": 5000,
+        "Phone": 0
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal priorities",
+        "shared surplus",
+        "remaining targets",
+        "contribution dates for deadline feasibility"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_split",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 125,
+      "question": "How much can I spend on my birthday celebration?",
+      "intent": "Birthday celebration limit",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 126,
+      "question": "How should I budget for gifts, food, and transportation during Christmas?",
+      "intent": "Christmas spending after essential needs",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 10000
+      },
+      "expected": {
+        "income": 10000,
+        "essentials": 5600,
+        "afterEssentials": 4400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 127,
+      "question": "Can I afford to move out and rent a place?",
+      "intent": "Moving-out affordability with supplied full costs",
+      "completeInput": {
+        "language": "en",
+        "operation": "afford_purchase",
+        "purchase": 30000
+      },
+      "expected": {
+        "available": 36800,
+        "afterPurchase": 6800,
+        "affordable": true
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "full purchase price",
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "afford_purchase",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 128,
+      "question": "How much should I save before moving into a rental, including deposits and basic furniture?",
+      "intent": "Rental full one-time move cost compared with alternative",
+      "completeInput": {
+        "language": "en",
+        "operation": "cost_plan",
+        "target": 30000,
+        "alternativeCost": 20000
+      },
+      "expected": {
+        "difference": 10000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "complete first scenario costs",
+        "comparable alternative costs",
+        "same period"
+      ],
+      "tools": [
+        "summary",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cost_plan",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 129,
+      "question": "Would living closer to work save money after accounting for higher rent?",
+      "intent": "Comparable monthly rent plus commute costs supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "cost_plan",
+        "target": 12000,
+        "alternativeCost": 11000
+      },
+      "expected": {
+        "difference": 1000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "complete first scenario costs",
+        "comparable alternative costs",
+        "same period"
+      ],
+      "tools": [
+        "summary",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cost_plan",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 130,
+      "question": "How much can I regularly contribute to my household?",
+      "intent": "Household cash support after protected needs",
+      "completeInput": {
+        "language": "en",
+        "operation": "cash_available"
+      },
+      "expected": {
+        "available": 36800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "accessible accounts",
+        "confirmed next payday",
+        "protected cash",
+        "essential daily cost",
+        "bill/debt due dates"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cash_available",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 131,
+      "question": "Can my income support both my personal expenses and family contributions?",
+      "intent": "Monthly personal and family allocation",
+      "completeInput": {
+        "language": "en",
+        "operation": "budget_allocate",
+        "income": 30000
+      },
+      "expected": {
+        "income": 30000,
+        "essentials": 5600,
+        "afterEssentials": 24400
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "income scenario",
+        "essential costs",
+        "unpaid bill/debt schedule"
+      ],
+      "tools": [
+        "summary",
+        "income",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "budget_allocate",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 132,
+      "question": "How much should I save for a planned wedding?",
+      "intent": "Wedding target and contribution dates supplied",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_contribution",
+        "target": 100000,
+        "saved": 20000,
+        "periods": 20
+      },
+      "expected": {
+        "required": 4000,
+        "contributions": 20
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target price",
+        "dedicated saved amount",
+        "deadline",
+        "actual remaining contribution dates"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_contribution",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 133,
+      "question": "How will starting a small business affect my personal budget?",
+      "intent": "Business startup cost versus same-period alternative",
+      "completeInput": {
+        "language": "en",
+        "operation": "cost_plan",
+        "target": 30000,
+        "alternativeCost": 10000
+      },
+      "expected": {
+        "difference": 20000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "complete first scenario costs",
+        "comparable alternative costs",
+        "same period"
+      ],
+      "tools": [
+        "summary",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cost_plan",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 134,
+      "question": "Can I afford to take a lower-paying job with cheaper transportation costs?",
+      "intent": "Net job-cost difference for comparable supplied amounts",
+      "completeInput": {
+        "language": "en",
+        "operation": "cost_plan",
+        "target": 25000,
+        "alternativeCost": 28000
+      },
+      "expected": {
+        "difference": -3000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "complete first scenario costs",
+        "comparable alternative costs",
+        "same period"
+      ],
+      "tools": [
+        "summary",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "cost_plan",
+        "language": "en",
+        "lent": false
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 135,
+      "question": "How much should I save before taking a month off work?",
+      "intent": "One-month essential-cost reserve before leave",
+      "completeInput": {
+        "language": "en",
+        "operation": "emergency_cover",
+        "emergencyMonths": 1
+      },
+      "expected": {
+        "target": 5600
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "essential daily costs",
+        "bill/debt schedule",
+        "user-chosen reserve months"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "goals",
+        "obligations",
+        "debts",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "emergency_cover",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 136,
+      "question": "Where does most of my money go?",
+      "intent": "Largest recorded spending category",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 5100,
+        "largestCategory": "Food & Dining",
+        "largestAmount": 2000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 137,
+      "question": "Did I spend more this month than last month?",
+      "intent": "Comparable month-to-date spending dates",
+      "completeInput": {
+        "language": "en",
+        "operation": "spending_compare"
+      },
+      "expected": {
+        "spent": 5100,
+        "previous": 2300,
+        "difference": 2800
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "equivalent date ranges",
+        "classified spending",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "spending_compare",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 138,
+      "question": "Which spending category increased the most?",
+      "intent": "Category with greatest comparable increase",
+      "completeInput": {
+        "language": "en",
+        "operation": "spending_compare"
+      },
+      "expected": {
+        "mostIncreasedCategory": "Bills",
+        "largestIncrease": 1000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "equivalent date ranges",
+        "classified spending",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "spending_compare",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 139,
+      "question": "How much have I spent on food delivery this year?",
+      "intent": "Explicitly classified food delivery spending for calendar year",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "category": "Food Delivery",
+        "from": "2026-01-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 600
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en",
+        "from": "2026-01-01",
+        "until": "2026-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 140,
+      "question": "If I cut my food delivery spending in half, how much could I save monthly?",
+      "intent": "Half of recorded delivery cost for supplied period",
+      "completeInput": {
+        "language": "en",
+        "operation": "spending_cut",
+        "category": "Food Delivery",
+        "percentCut": 50
+      },
+      "expected": {
+        "saving": 300
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "category and reduction percentage OR unit/replacement costs and weekdays/date range"
+      ],
+      "tools": [
+        "summary",
+        "spending",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "spending_cut",
+        "language": "en",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 141,
+      "question": "How much would I save by bringing lunch three days a week?",
+      "intent": "Three stated weekdays and meal replacement costs",
+      "completeInput": {
+        "language": "en",
+        "operation": "spending_cut",
+        "unitCost": 150,
+        "replacementCost": 70,
+        "weekdays": [
+          1,
+          3,
+          5
+        ],
+        "from": "2026-10-05",
+        "until": "2026-10-11"
+      },
+      "expected": {
+        "occurrences": 3,
+        "saving": 240
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "category and reduction percentage OR unit/replacement costs and weekdays/date range"
+      ],
+      "tools": [
+        "summary",
+        "spending",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "spending_cut",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 142,
+      "question": "If I stop buying a ₱120 drink every weekday, how much could I save in a year?",
+      "intent": "Actual weekdays in calendar year, no holiday exclusions stated",
+      "completeInput": {
+        "language": "en",
+        "operation": "spending_cut",
+        "unitCost": 120,
+        "replacementCost": 0,
+        "weekdays": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "from": "2027-01-01",
+        "until": "2027-12-31"
+      },
+      "expected": {
+        "occurrences": 261,
+        "saving": 31320
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "category and reduction percentage OR unit/replacement costs and weekdays/date range"
+      ],
+      "tools": [
+        "summary",
+        "spending",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "spending_cut",
+        "language": "en",
+        "target": 120
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 143,
+      "question": "Are small daily purchases slowing down my savings goals?",
+      "intent": "Small purchases require category review, no invented merchants",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 5100,
+        "largestCategory": "Food & Dining",
+        "largestAmount": 2000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en",
+        "frequency": "daily"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 144,
+      "question": "Which expenses could I reduce to free up ₱2,000 monthly?",
+      "intent": "Illustrative selected food-category cut toward target",
+      "completeInput": {
+        "language": "en",
+        "operation": "spending_cut",
+        "category": "Food & Dining",
+        "percentCut": 100
+      },
+      "expected": {
+        "saving": 2000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "category and reduction percentage OR unit/replacement costs and weekdays/date range"
+      ],
+      "tools": [
+        "summary",
+        "spending",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "spending_cut",
+        "language": "en",
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 145,
+      "question": "If I earn an extra ₱3,000 monthly, when will I reach my goal?",
+      "intent": "Entire extra income explicitly assigned to goal contribution",
+      "completeInput": {
+        "language": "en",
+        "operation": "goal_change",
+        "goalNames": [
+          "Laptop"
+        ],
+        "incomeDelta": 3000
+      },
+      "expected": {
+        "periods": 6,
+        "contribution": 7000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "selected goal",
+        "current saving plan",
+        "explicit change",
+        "actual schedule for completion date"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "goal_change",
+        "language": "en",
+        "target": 3000,
+        "frequency": "monthly"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 146,
+      "question": "If I keep my current spending habits, what will my balance look like at the end of the month?",
+      "intent": "Current-month recorded expense pace; today counted only once",
+      "completeInput": {
+        "language": "en",
+        "operation": "period_forecast",
+        "until": "2026-11-01"
+      },
+      "expected": {
+        "estimatedSpending": 14662.5,
+        "estimatedBalance": 35337.5
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "month history coverage",
+        "actual spending/saving pace",
+        "forecast end date"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "spending",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "period_forecast",
+        "language": "en",
+        "forecastKind": "balance"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 147,
+      "question": "How much could I save by the end of the year at my current pace?",
+      "intent": "Net saving pace, withdrawals offset contributions; today counted once",
+      "completeInput": {
+        "language": "en",
+        "operation": "period_forecast",
+        "forecastKind": "savings",
+        "until": "2027-01-01"
+      },
+      "expected": {
+        "estimatedAdditional": 7350
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "month history coverage",
+        "actual spending/saving pace",
+        "forecast end date"
+      ],
+      "tools": [
+        "summary",
+        "accounts",
+        "spending",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "period_forecast",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 148,
+      "question": "Which month had my highest spending, and what caused it?",
+      "intent": "Highest recorded month and associated category",
+      "completeInput": {
+        "language": "en",
+        "operation": "history_peak"
+      },
+      "expected": {
+        "month": "2026-10",
+        "amount": 5100,
+        "largestCategory": "Food & Dining"
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "spending history",
+        "category classification",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "history_peak",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 149,
+      "question": "Based on my recorded finances, what is one practical change I can make this week?",
+      "intent": "One practical review of highest category",
+      "completeInput": {
+        "language": "en",
+        "operation": "category_spending",
+        "from": "2026-10-01",
+        "until": "2026-10-08"
+      },
+      "expected": {
+        "spent": 5100,
+        "largestCategory": "Food & Dining",
+        "largestAmount": 2000
+      },
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "classified spending",
+        "date range",
+        "coverage"
+      ],
+      "tools": [
+        "summary",
+        "spending"
+      ],
+      "missingInput": {
+        "operation": "category_spending",
+        "language": "en",
+        "from": "2026-10-05",
+        "until": "2026-10-08"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    },
+    {
+      "id": 150,
+      "question": "What information do you still need from me to estimate when I can afford my goal accurately?",
+      "intent": "Remaining inputs for an accurate target timeline",
+      "completeInput": {
+        "language": "en",
+        "operation": "missing_info",
+        "goalNames": [
+          "Laptop"
+        ],
+        "schedule": {
+          "frequency": "monthly",
+          "first": "2026-10-15"
+        }
+      },
+      "expected": {},
+      "edgeCases": [
+        "Missing records are not zero",
+        "No writes",
+        "Owner-scoped fresh data",
+        "Centavo arithmetic",
+        "Hypothetical inputs labeled"
+      ],
+      "requiredInputs": [
+        "target",
+        "dedicated savings",
+        "affordable contribution",
+        "schedule"
+      ],
+      "tools": [
+        "summary",
+        "goals",
+        "what_if"
+      ],
+      "missingInput": {
+        "operation": "missing_info",
+        "language": "en"
+      },
+      "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
+    }
+  ]
+}

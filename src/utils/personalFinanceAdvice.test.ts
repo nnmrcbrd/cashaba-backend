@@ -162,7 +162,7 @@ test('saved read-only conversation context survives reload and a pause, but stop
   const history = [{ question: 'How long to buy a phone?', model: 'local-personal-finance-v2', state: 'NEEDS_CLARIFICATION', pendingAction: question.context }];
   const recovered = recoverAdviceContext(history, noGoal);
   assert.equal(personalAdviceTurn('194,990', noGoal, recovered)?.context?.price, 194990);
-  assert.equal(readAdviceContext(question.context, Date.now() + 24 * 60 * 60_000)?.awaiting, 'price');
+  assert.equal(readAdviceContext(question.context, Date.now() + 24 * 60 * 60_000), null);
   assert.equal(readAdviceContext(question.context, Date.now() - 2 * 60_000), null);
   assert.equal(recoverAdviceContext([...history, { question: 'Spent 100 on food from Cash today', model: 'local', state: 'AWAITING_CONFIRMATION', pendingAction: { intent: 'LOG_TRANSACTION' } }], noGoal), null);
   assert.equal(readAdviceContext({ ...question.context, price: -1 }), null);
