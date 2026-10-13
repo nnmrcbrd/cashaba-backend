@@ -31,7 +31,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-backend-api
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/cashaba-backend
 
   deploy:
     needs: [build-and-push]
@@ -47,7 +47,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: 'docker/docker-compose.yaml,scripts/deploy.sh'
+          source: 'docker/cashaba-backend/docker-compose.yaml,scripts/cashaba-backend/deploy.sh'
           target: '/root'
 
       - name: SSH and Deploy
