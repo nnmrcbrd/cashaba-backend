@@ -1,165 +1,59 @@
-name: Backend Docker and VPS deployment
+name: Deploy
 
 on:
   push:
-    branches: [main]
-    paths-ignore: ["docs/**", "**/*.md"]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      deploy:
-        description: Deploy this main-branch version to the configured VPS
-        type: boolean
-        default: false
-
-permissions:
-  contents: read
-
-concurrency:
-  group: backend-release-${{ github.ref }}
-  cancel-in-progress: false
+    branches:
+      - main
+    paths-ignore:
+      - 'Docs/**'
 
 jobs:
-  verify:
+  build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_DB: cashaba_ci
-          POSTGRES_USER: cashaba_ci
-          POSTGRES_PASSWORD: ci-only-disposable-password
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U cashaba_ci -d cashaba_ci"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-    env:
-      TEST_DATABASE_URL: postgresql://cashaba_ci:ci-only-disposable-password@localhost:5432/cashaba_ci
-      AI_LIVE_EVAL: "0"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm ci
-      - run: npm run db:generate
-      - run: npx tsc --noEmit
-      - run: npm test
-      - run: npm run test:docker
-      - name: Prepare pgvector in the disposable CI database
-        run: >-
-          node --input-type=module -e "import {Client} from 'pg';
-          const c=new Client({connectionString:process.env.TEST_DATABASE_URL});
-          await c.connect(); await c.query('CREATE EXTENSION IF NOT EXISTS vector'); await c.end();"
-      - run: npm run test:integration
-      - name: Verify new database baseline and existing-database rejection
-        env:
-          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
-        run: |
-          node docker/init-empty-database.mjs --confirm-empty
-          npx prisma migrate deploy
-          if node docker/init-empty-database.mjs --confirm-empty; then
-            echo 'Existing database initialization should have been rejected' >&2
-            exit 1
-          fi
-      - run: npm run build
-      - name: Start the Linux production image using synthetic configuration
-        run: bash docker/smoke-runtime.sh
-      - name: Validate Compose configuration without using application secrets
-        run: |
-          cp .env.production.example .env.production
-          cp .env.docker.example .env.docker
-          docker compose --env-file .env.docker config --quiet
-          docker compose --env-file .env.docker -f docker-compose.yaml -f docker/docker-compose.tls.yaml config --quiet
-          bash -n scripts/deploy.sh
 
-  images:
-    needs: verify
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    outputs:
-      image: ${{ steps.tags.outputs.image }}
-      migrations: ${{ steps.tags.outputs.migrations }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set immutable image tags
-        id: tags
-        env:
-          REGISTRY_OWNER: ${{ vars.DOCKERHUB_USERNAME }}
-          PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-        run: |
-          if [[ "$PUBLISH" == true && -z "$REGISTRY_OWNER" ]]; then
-            echo 'Set the DOCKERHUB_USERNAME repository variable' >&2
-            exit 1
-          fi
-          REGISTRY_OWNER="${REGISTRY_OWNER:-cashaba-validation}"
-          [[ "$REGISTRY_OWNER" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
-          echo "image=$REGISTRY_OWNER/cashaba-backend:sha-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-          echo "migrations=$REGISTRY_OWNER/cashaba-backend:migrations-sha-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build API runtime image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
         with:
-          context: .
-          target: runtime
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          tags: ${{ steps.tags.outputs.image }}
-          cache-from: type=gha,scope=backend-runtime
-          cache-to: type=gha,mode=max,scope=backend-runtime
-      - name: Build matching migration image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: migrations
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          tags: ${{ steps.tags.outputs.migrations }}
-          cache-from: type=gha,scope=backend-migrations
-          cache-to: type=gha,mode=max,scope=backend-migrations
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-backend-api
 
   deploy:
-    needs: images
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      ((github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true') ||
-       (github.event_name == 'workflow_dispatch' && inputs.deploy))
+    needs: [build-and-push]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: production
+
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Upload backend deployment bundle and deploy over verified SSH
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-          SSH_PORT: ${{ vars.SSH_PORT || '22' }}
-          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/casha-ba-backend' }}
-          IMAGE: ${{ needs.images.outputs.image }}
-          MIGRATION_IMAGE: ${{ needs.images.outputs.migrations }}
-        run: |
-          set -Eeuo pipefail
-          : "${SSH_HOST:?}" "${SSH_USER:?}" "${SSH_PRIVATE_KEY:?}" "${SSH_KNOWN_HOSTS:?}"
-          [[ "$SSH_HOST" =~ ^[A-Za-z0-9.-]+$ && "$SSH_USER" =~ ^[A-Za-z0-9_-]+$ ]]
-          [[ "$SSH_PORT" =~ ^[0-9]+$ && "$DEPLOY_PATH" =~ ^/[A-Za-z0-9/_-]+$ && "$DEPLOY_PATH" != / ]]
-          KEY_DIR="$(mktemp -d)"
-          trap 'rm -rf -- "$KEY_DIR"' EXIT
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$KEY_DIR/key"
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$KEY_DIR/known_hosts"
-          chmod 600 "$KEY_DIR/key" "$KEY_DIR/known_hosts"
-          SSH_ARGS=(-i "$KEY_DIR/key" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KEY_DIR/known_hosts")
-          RELEASE="$DEPLOY_PATH/releases/$GITHUB_SHA"
-          tar -czf "$KEY_DIR/deployment.tar.gz" docker-compose.yaml nginx.conf docker/docker-compose.tls.yaml docker/docker-compose.database.yaml docker/nginx-tls.conf docker/nginx scripts/deploy.sh
-          ssh "${SSH_ARGS[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$RELEASE'"
-          scp "${SSH_ARGS[@]}" -P "$SSH_PORT" "$KEY_DIR/deployment.tar.gz" "$SSH_USER@$SSH_HOST:$RELEASE/deployment.tar.gz"
-          ssh "${SSH_ARGS[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "tar -xzf '$RELEASE/deployment.tar.gz' -C '$RELEASE' && DEPLOY_PATH='$DEPLOY_PATH' bash '$RELEASE/scripts/deploy.sh' '$IMAGE' '$MIGRATION_IMAGE'"
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Copy Docker Compose & Script to Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: 'docker/docker-compose.yaml,scripts/deploy.sh'
+          target: '/root'
+
+      - name: SSH and Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: sh /root/scripts/deploy.sh
