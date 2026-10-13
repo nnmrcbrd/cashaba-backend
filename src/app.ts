@@ -2,6 +2,7 @@ import express, { Application, NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { prisma } from './lib/prisma.js';
+import { isAllowedBrowserOrigin } from './config/origins';
 
 const app: Application = express();
 if (process.env.NODE_ENV === 'production') {
@@ -12,7 +13,7 @@ if (process.env.NODE_ENV === 'production') {
 
 // Middlewares
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, callback) => callback(null, !origin || isAllowedBrowserOrigin(origin)),
   credentials: true,
   exposedHeaders: ['Retry-After', 'RateLimit-Limit', 'RateLimit-Remaining'],
 }));
