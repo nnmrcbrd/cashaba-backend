@@ -8,8 +8,6 @@ src/generated
 ai-live-evaluation.json
 .env.*
 !.env.example
-!.env.production.example
-!.env.docker.example
 docker/tls/
 .deploy.lock
 .env.images*

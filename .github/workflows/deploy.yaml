@@ -35,7 +35,8 @@ jobs:
           test -f docker-compose.yaml
           test -f scripts/deploy.sh
           bash -n scripts/deploy.sh
-          docker compose -f docker-compose.yaml config --no-env-resolution --format json | node docker/validate-runtime-compose.mjs
+          # Render the fixed model without touching the VPS-only env_file, including on Compose v2.
+          docker compose -f docker-compose.yaml config --no-interpolate --no-env-resolution --no-path-resolution --format json | node docker/validate-runtime-compose.mjs
           node --test docker/deploy.test.mjs
 
       - name: Set up Docker Buildx

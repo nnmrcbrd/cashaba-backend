@@ -11,8 +11,6 @@ src/generated
 **/.env
 **/.env.*
 !.env.example
-!.env.production.example
-!.env.docker.example
 *.pem
 *.key
 **/*.pem

@@ -1,9 +1,0 @@
-# Docker Compose >= 2.24.4 is required for !override.
-services:
-  nginx:
-    ports: !override
-      - "${PUBLIC_BIND_ADDRESS:-0.0.0.0}:${PUBLIC_HTTP_PORT:-80}:80"
-      - "${PUBLIC_BIND_ADDRESS:-0.0.0.0}:${PUBLIC_HTTPS_PORT:-443}:443"
-    volumes:
-      - ./docker/nginx-tls.conf:/etc/nginx/nginx.conf:ro
-      - ${TLS_CERT_DIR:-./docker/tls}:/etc/nginx/tls:ro

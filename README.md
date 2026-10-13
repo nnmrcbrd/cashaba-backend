@@ -48,5 +48,5 @@ Run `npx prisma migrate deploy` against an existing database before deploying th
 ## Docker and VPS deployment
 
 See [the backend Docker/VPS guide](docs/DOCKER_DEPLOYMENT.md) for the production
-Dockerfile, Compose, Nginx, database initialization and separate GitHub Actions
-workflow. This backend deployment does not build or deploy the frontend.
+image, app-only Compose, host Nginx reference and GitHub Actions workflow.
+The container uses port 8000; the VPS forwards loopback port 8001 to it.
