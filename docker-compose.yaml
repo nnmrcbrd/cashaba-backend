@@ -9,5 +9,5 @@ services:
       - /root/env/cashaba-backend/.env
     environment:
       NODE_ENV: production
-      PORT: "8001"
+      PORT: "8000"
     restart: unless-stopped

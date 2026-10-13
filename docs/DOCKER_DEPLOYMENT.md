@@ -1,5 +1,48 @@
 # Backend Docker and VPS deployment
 
+## Current app-only deployment
+
+The current `docker-compose.yaml` runs the `app` service from
+`mrnbnld/cashaba-backend:latest`, with host binding `127.0.0.1:8001:8000`.
+It reads `/root/env/cashaba-backend/.env` on the VPS. Keep this file on the server;
+the workflow uploads only `docker-compose.yaml` and `scripts/deploy.sh`.
+
+The five separate **repository secrets** are `DOCKERHUB_USERNAME`,
+`DOCKERHUB_TOKEN`, `SSH_HOST`, `SSH_USER`, and `SSH_PRIVATE_KEY`. The current
+server paths require `SSH_USER=root`. The Docker Hub token needs Repo Read & Write
+access, and its account must be able to push `mrnbnld/cashaba-backend`.
+
+Main pushes and manual **Deploy** workflow runs validate the deployment files,
+build/publish the runtime image, copy the files to `/root/docker/cashaba-backend`,
+and execute:
+
+```bash
+bash /root/docker/cashaba-backend/scripts/deploy.sh
+```
+
+The script locks this deployment, checks Compose and the server environment,
+pulls the image, and runs an unpublished preflight instance to verify production
+settings and database health before replacing the running `app`. Compose waits
+for the app's image health check to pass. Configuration, pull or preflight failures
+stop before restarting the running service. A failed rollout returns an error.
+The script does not dump environment values or container logs into Actions.
+
+The VPS needs Bash, Docker Engine, a Compose plugin supporting `--wait`, and
+`flock`. Host Nginx should proxy `https://api.casha-ba.online` to
+`http://127.0.0.1:8001`. See [AUTH_COOKIES.md](AUTH_COOKIES.md) for frontend/API
+origins and cookie settings. The database schema must already be migrated;
+this app-only deployment does not initialize or migrate an existing database.
+
+When the copy step reports `tar: empty archive`, confirm its source paths are
+`docker-compose.yaml,scripts/deploy.sh`; this repository does not have nested
+`docker/cashaba-backend` or `scripts/cashaba-backend` source folders.
+
+## Previous managed-stack deployment reference
+
+The remaining sections describe the earlier migration/Nginx Compose stack and
+its separate images and environment files. Those commands are not used by the
+current app-only workflow or its replacement `scripts/deploy.sh`.
+
 This repository deploys the Express API only. It has no frontend build context,
 image, service or checkout. The frontend can be hosted independently. This adapts
 the reference repository's Docker Hub → SSH → Compose flow:
