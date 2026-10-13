@@ -1,57 +1,13 @@
 name: cashaba-backend
 
-x-logging: &logging
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "3"
-
 services:
-  migrations:
-    image: ${MIGRATIONS_IMAGE:-cashaba-backend:migrations-local}
-    env_file: ${BACKEND_ENV_FILE:-.env.production}
-    environment:
-      NODE_ENV: production
-    restart: "no"
-    logging: *logging
-
-  backend:
-    image: ${BACKEND_IMAGE:-cashaba-backend:local}
-    env_file: ${BACKEND_ENV_FILE:-.env.production}
+  app:
+    image: mrnbnld/cashaba-backend
+    ports:
+       - "127.0.0.1:8001:8000"
+    env_file:
+      - /root/env/cashaba-backend/.env
     environment:
       NODE_ENV: production
       PORT: "8000"
-      RATE_LIMIT_STORE: postgres
-      TRUST_PROXY_HOPS: "1"
-    depends_on:
-      migrations:
-        condition: service_completed_successfully
-    expose:
-      - "8000"
-    init: true
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/api/health',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 30s
-      timeout: 6s
-      start_period: 30s
-      retries: 3
-    logging: *logging
-
-  nginx:
-    image: nginx:1.30.5-alpine
-    ports:
-      - "${HTTP_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docker/nginx:/etc/nginx/casha-ba:ro
-    depends_on:
-      backend:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/_nginx-health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    logging: *logging
