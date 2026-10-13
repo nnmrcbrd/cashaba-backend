@@ -1,4 +1,4 @@
-# Casha-Ba backend
+# CASHABA BACKEND
 
 The backend is an Express 5 API backed by PostgreSQL and Prisma. It owns authentication, authorization, financial operations, Safe-to-Spend calculations, analytics, imports, AI commands, and administration.
 
