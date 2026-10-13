@@ -22,6 +22,7 @@ import {
 import { randomBytes, timingSafeEqual } from 'crypto';
 import { EmailOtpRateLimitError, requestEmailOtp } from '../services/emailOtp';
 import { FinancialError } from '../services/financialOperation';
+import { clearRefreshCookie, setRefreshCookie } from '../utils/authCookies';
 
 function sendOtpRateLimit(res: Response, error: unknown) {
   if (!(error instanceof EmailOtpRateLimitError)) return false;
@@ -29,14 +30,6 @@ function sendOtpRateLimit(res: Response, error: unknown) {
   res.status(429).json({ message: error.message, retryAfterSeconds: error.retryAfterSeconds });
   return true;
 }
-
-const refreshCookieOptions = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: process.env.NODE_ENV === 'production' ? 'none' as const : 'lax' as const,
-  maxAge: 7 * 24 * 60 * 60 * 1000,
-  path: '/api/auth',
-};
 
 const oauthStateCookieOptions = {
   httpOnly: true,
@@ -135,7 +128,7 @@ export const finishGoogleOAuth = async (req: Request, res: Response): Promise<vo
     });
 
     res.clearCookie('googleOAuthState', oauthStateCookieOptions);
-    res.cookie('refreshToken', result.refreshToken, refreshCookieOptions);
+    setRefreshCookie(res, result.refreshToken);
     res.redirect(oauthResultUrl());
   } catch (error) {
     res.clearCookie('googleOAuthState', oauthStateCookieOptions);
@@ -150,7 +143,7 @@ export const signup = async (req: Request, res: Response): Promise<void> => {
     const user = await registerUser(validatedData);
     // A previous browser session must not masquerade as the new account.
     await revokeUserSession(req.cookies?.refreshToken);
-    res.clearCookie('refreshToken', refreshCookieOptions);
+    clearRefreshCookie(res);
 
     res.status(201).json({
       message: 'Enter the six-digit code from your email before signing in.',
@@ -223,7 +216,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     const result = await loginUser(validatedData);
 
     // Send access token through response body, and refresh token via secure http-only cookie
-    res.cookie('refreshToken', result.refreshToken, refreshCookieOptions);
+    setRefreshCookie(res, result.refreshToken);
 
     res.status(200).json({
       message: 'Login successful',
@@ -255,10 +248,10 @@ export const refresh = async (req: Request, res: Response): Promise<void> => {
     }
 
     const result = await refreshUserSession(refreshToken);
-    res.cookie('refreshToken', result.refreshToken, refreshCookieOptions);
+    setRefreshCookie(res, result.refreshToken);
     res.status(200).json({ accessToken: result.accessToken, freshSignIn: result.freshSignIn });
   } catch (error: any) {
-    res.clearCookie('refreshToken', refreshCookieOptions);
+    clearRefreshCookie(res);
     res.status(401).json({ message: error.message || 'Unable to refresh session' });
   }
 };
@@ -267,7 +260,7 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
   try {
     await revokeUserSession(req.cookies?.refreshToken);
   } finally {
-    res.clearCookie('refreshToken', refreshCookieOptions);
+    clearRefreshCookie(res);
     res.status(200).json({ message: 'Logged out successfully' });
   }
 };
@@ -302,7 +295,7 @@ export const changePassword = async (req: Request, res: Response): Promise<void>
     const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
     const userId = req.user!.userId || req.user!.id;
     await changeUserPassword(userId, currentPassword, newPassword, req.user!.authMethod);
-    res.clearCookie('refreshToken', refreshCookieOptions);
+    clearRefreshCookie(res);
     res.status(200).json({ message: 'Password changed successfully. Please log in again.' });
   } catch (error: any) {
     if (error.name === 'ZodError') res.status(400).json({ message: error.issues?.[0]?.message || 'Invalid password' });

@@ -2,6 +2,8 @@
 
 The backend is an Express 5 API backed by PostgreSQL and Prisma. It owns authentication, authorization, financial operations, Safe-to-Spend calculations, analytics, imports, AI commands, and administration.
 
+For production sign-in across frontend/API subdomains, see [authentication cookie configuration](docs/AUTH_COOKIES.md).
+
 Assistant tools, limits, configuration and the preserved 150-question evaluation bank are documented in [docs/AI_ASSISTANT.md](docs/AI_ASSISTANT.md).
 
 ## Local setup
