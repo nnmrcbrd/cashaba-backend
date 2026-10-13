@@ -256,7 +256,7 @@ export const refresh = async (req: Request, res: Response): Promise<void> => {
 
     const result = await refreshUserSession(refreshToken);
     res.cookie('refreshToken', result.refreshToken, refreshCookieOptions);
-    res.status(200).json({ accessToken: result.accessToken });
+    res.status(200).json({ accessToken: result.accessToken, freshSignIn: result.freshSignIn });
   } catch (error: any) {
     res.clearCookie('refreshToken', refreshCookieOptions);
     res.status(401).json({ message: error.message || 'Unable to refresh session' });

@@ -6,3 +6,17 @@ src/generated
 
 /src/generated/prisma
 ai-live-evaluation.json
+.env.*
+!.env.example
+!.env.production.example
+!.env.docker.example
+docker/tls/
+.deploy.lock
+.env.images*
+*.pem
+*.key
+*.p12
+*.pfx
+*.dump
+*.backup
+backups/

@@ -1,17 +1,19 @@
 import { aliasFinancialContext } from '@/utils/aiSafety';
-import { isExplicitFinancialAction, type AdviceFacts } from '@/utils/personalFinanceAdvice';
+import { conversationFollowUp, isExplicitFinancialAction, type AdviceFacts } from '@/utils/personalFinanceAdvice';
 import { executeFinancialPlan, planSchema, readPlanningContext, type FinancialPlan, type PlanningContext } from '@/utils/financialPlanner';
 import { businessDateLabel } from '@/utils/calendar';
 import { addMonths } from '@/utils/planningCalculators';
 import { retrieveGuidance } from '@/utils/assistantKnowledge';
 import { boundedHistory, generateBounded, type Generate } from './aiRuntime';
 import { groundReply, renderGroundedReply } from '@/utils/coreConversation';
-import { isRecordedFinanceQuery, mentionsGoal, statedFrequency, statedGoalInputs } from '@/utils/planningInputs';
+import { isRecordedFinanceQuery, isPurchaseGoalImpact, mentionsGoal, statedFrequency, statedGoalInputs, statedPurchaseGoalInputs } from '@/utils/planningInputs';
 import { explainFinancialPlan, renderPlanningResponse, type ResponseDependencies } from './planningResponse';
 import { planningProviderSchema, unwrapPlanningParameters, PLANNING_PARAMETER_FORMAT } from '@/utils/planningProviderSchema';
 import { clearPlanningIntent, PLANNING_OPERATIONS } from '@/utils/planningIntent';
-import { explicitPlanningInputs } from '@/utils/planningExplicitInputs';
+import { explicitPlanningInputs, isStructuredPlanningReply } from '@/utils/planningExplicitInputs';
+import { naturalPlanningInputs } from '@/utils/planningNaturalInputs';
 import { retrieveRagContext } from './ragRetrieval';
+import { normalizeChatQuestion } from '@/utils/chatQuestion';
 
 const examples = [
   { topics: /allocated savings|haven[’']?t|havent|nothing saved/i, question: 'Price PHP 80000, allocated savings: 1000. I have not saved anything yet.', plan: { operation: 'goal_timeline', target: 80000, saved: 0, contribution: 1000 } },
@@ -23,7 +25,11 @@ const examples = [
 ];
 const language = (message: string): 'en' | 'tl' | 'ceb' => /pila|kanus.a|makapalit|tigom|akong|kwarta|gasto/i.test(message) ? 'ceb' : /magkano|kailan|ipon|sahod|baon|bibili|kaya ko|gastos|paano/i.test(message) ? 'tl' : 'en';
 const changesPlanningTopic = (message: string) => /^(?:new topic|start over|forget (?:that|this)|never mind|review|show|list|tell me)\b/i.test(message);
+const costMode = (message: string): FinancialPlan['costMode'] => /small business|lower.paying|(?:new|another).*job/i.test(message)
+  ? 'income_effect' : /compare|versus|\bvs\b|cash or.*installment|closer.*work/i.test(message)
+    ? 'comparison' : /deposits|basic furniture|move.in|moving.*rental|(?:save|set aside).*mov(?:e|ing)/i.test(message) ? 'total' : 'comparison';
 export function localFinancialPlan(message: string, facts: AdviceFacts, previous?: PlanningContext | null): FinancialPlan | null {
+  message = normalizeChatQuestion(message);
   if (isExplicitFinancialAction(message)) return null;
   if (isRecordedFinanceQuery(message)) return null;
   if (/^(?:explain|define|what do you mean|what (?:is|are) (?:a |an |the )?(?:transaction|budget|safe.to.spend|allocation|transfer)s?[?!.\s]*$|how (?:do i|to) (?:use|record|add|set|open))\b/i.test(message)) return null;
@@ -33,13 +39,20 @@ export function localFinancialPlan(message: string, facts: AdviceFacts, previous
   const explicit = explicitPlanningInputs(message, previous?.plan.frequency);
   const incomplete = previous ? executeFinancialPlan(previous.plan, facts).missing : [];
   const shortClarification = previous && incomplete.length && message.length < 300 && !/^(?:how|why|what|which|when|can|could|will|should|is|are|do)\b/i.test(message);
-  const goalCorrection = previous?.plan.operation.startsWith('goal_') && (Object.keys(stated).length > 0 || Object.keys(explicit).length > 0) && !/^(?:how|why|what|which|when|can|could|will|should)\b/i.test(message);
+  const goalCorrection = previous?.plan.operation.startsWith('goal_') && (Object.keys(stated).length > 0 || Object.keys(explicit).length > 0) && !/^(?:how|why|what|which|when|can|could|will|should|is|are|do|does|would)\b/i.test(message);
   const frequencyOnly = previous?.plan.operation.startsWith('goal_') && /^(?:daily|weekly|monthly|payday)$/i.test(message);
-  const follow = previous && !changesPlanningTopic(message) && (shortClarification || bare || goalCorrection || frequencyOnly || (/^(?:what if|if i|and|instead|what about)/i.test(message)
+  const intent = isStructuredPlanningReply(message) ? null : clearPlanningIntent(message);
+  // "If I..." can introduce a different calculation, not just a correction.
+  // Purchase funding belongs to that purchase. A different goal operation must
+  // not inherit it just because both calculations concern savings goals.
+  const compatibleIntent = !intent || intent === previous?.plan.operation
+    || (intent.startsWith('goal_') && previous?.plan.operation.startsWith('goal_')
+      && previous.plan.goalChangeKind !== 'purchase' && previous.plan.purchase == null);
+  const follow = previous && compatibleIntent && !changesPlanningTopic(message) && (isStructuredPlanningReply(message) || conversationFollowUp(message) === 'retry' || shortClarification || bare || goalCorrection || frequencyOnly || (/^(?:what if|if i|and|instead|what about)/i.test(message)
     && !/\b(?:buy|purchase|salary|income drops|new topic|which bill)\b/i.test(message)));
-  if (!looksFinancial && !follow && !/financ|family contribution|spent/i.test(message)) return null;
+  if (!looksFinancial && !follow && !/financ|family contribution|spent|move.in.*cost|(?:save|set aside).*mov(?:e|ing)/i.test(message)) return null;
   let operation: FinancialPlan['operation'] = 'budget_review';
-  if (follow) operation = /more|increase|extra|withdraw|skip/i.test(message) && previous!.plan.operation.startsWith('goal_') ? 'goal_change' : previous!.plan.operation;
+  if (follow) operation = intent ?? (/more|increase|extra|withdraw|skip/i.test(message) && previous!.plan.operation.startsWith('goal_') ? 'goal_change' : previous!.plan.operation);
   else if (/what information|still need|missing information/i.test(message)) operation = 'missing_info';
   else if (/owe|lent.*not.*repaid|borrowed money.*still/i.test(message)) operation = 'debt_totals';
   else if (/remain.*income.*debt|income after.*debt/i.test(message)) operation = 'debt_budget';
@@ -67,8 +80,25 @@ export function localFinancialPlan(message: string, facts: AdviceFacts, previous
   else if (/daily.*limit|limit.*daily|last.*payday|late.*allowance|payday.*delay|keep untouched/i.test(message)) operation = 'daily_limit';
   else if (/afford|can i.*(?:buy|spend|eat|lend|cover|handle|support)|enough.*(?:bill|money)|purchase today|if i (?:spend|buy|lend)/i.test(message)) operation = 'afford_purchase';
   else if (/safe.*spend|available|how much.*spend|how much.*household/i.test(message)) operation = 'cash_available';
-  if (!follow) operation = clearPlanningIntent(message) ?? operation;
+  if (!follow) operation = intent ?? operation;
   const plan: FinancialPlan = { ...(follow ? previous!.plan : {}), operation, language: language(message) };
+  const named = facts.goals.filter(goal => mentionsGoal(message, goal.name) && !(goal.name.toLowerCase() === 'emergency' && /if an emergency happens/i.test(message)));
+  const selected = explicit.goalNames ?? (named.length ? named.map(goal => goal.name) : undefined);
+  if (follow && selected && (previous!.plan.goalNames?.length || previous!.plan.target != null && incomplete[0] !== 'goal_selection')
+    && JSON.stringify(selected) !== JSON.stringify(previous!.plan.goalNames)) {
+    for (const key of ['target', 'saved', 'contribution', 'frequency', 'schedule', 'periods', 'delta', 'withdrawal', 'bonus', 'bonusToDebt', 'skipPeriods', 'goalMode', 'finishMonthsEarlier'] as const) delete plan[key];
+  }
+  const newGoalChange = follow && previous?.plan.goalChangeKind === 'purchase' && !isPurchaseGoalImpact(message)
+    && /\b(?:bonus|skip saving|increase.*sav|earn.*extra)\b/i.test(message);
+  if (newGoalChange) { delete plan.purchase; delete plan.purchaseFunding; delete plan.goalChangeKind; }
+  if (follow && plan.operation === 'goal_change' && /^(?:if i|what if i)\b/i.test(message)
+    && /\b(?:skip saving|withdraw|receive.*bonus|increase.*sav|earn.*extra)\b/i.test(message)) {
+    for (const key of ['delta', 'withdrawal', 'bonus', 'bonusToDebt', 'skipPeriods', 'incomeDelta'] as const) delete plan[key];
+  }
+  const purchaseImpact = isPurchaseGoalImpact(message) || (follow && previous?.plan.operation === 'goal_change'
+    && !newGoalChange && (previous.plan.goalChangeKind === 'purchase' || previous.plan.purchase != null));
+  if (purchaseImpact) { plan.operation = 'goal_change'; plan.goalChangeKind = 'purchase'; Object.assign(plan, statedPurchaseGoalInputs(message)); }
+  if (operation === 'cost_plan' && (!follow || !plan.costMode)) plan.costMode = costMode(message);
   const amounts = [...message.matchAll(/(?:₱|php\s*)(\d+(?:,\d{3})*(?:\.\d{1,2})?)/gi)].map(match => Number(match[1].replaceAll(',', '')));
   const money = amounts[0];
   const freq = statedFrequency(message);
@@ -78,8 +108,8 @@ export function localFinancialPlan(message: string, facts: AdviceFacts, previous
   if (/no other costs/i.test(message)) plan.otherCosts = 0;
   if (money != null && !(follow && bare)) {
     if (operation === 'afford_purchase') plan.purchase = money;
-    else if (operation === 'school_budget') { if (/allowance.*(?:₱|php)|(?:₱|php).+allowance/i.test(message)) plan.income = money; }
-    else if (operation === 'goal_change') { if (/withdraw/i.test(message)) plan.withdrawal = money; else if (/bonus/i.test(message)) { plan.bonus = money; if (/pay.*debt/i.test(message)) plan.bonusToDebt = money; } else plan.delta = money; }
+    else if (operation === 'school_budget') { /* Amount roles are resolved by naturalPlanningInputs below. */ }
+    else if (operation === 'goal_change' && !purchaseImpact) { if (/withdraw/i.test(message)) plan.withdrawal = money; else if (/bonus/i.test(message)) { plan.bonus = money; if (/pay.*debt/i.test(message)) plan.bonusToDebt = money; } else plan.delta = money; }
     else if (operation === 'goal_timeline' && /save.*(?:every day|per month|per week|monthly|weekly)/i.test(message)) { plan.contribution = money; if (amounts[1]) plan.target = amounts[1]; }
     else if (operation === 'goal_timeline' || operation === 'goal_contribution') plan.target = money;
     else if (operation === 'debt_payoff') plan.payment = money;
@@ -96,14 +126,13 @@ export function localFinancialPlan(message: string, facts: AdviceFacts, previous
   }
   if (/monthly.*(?:subscription|installment)|(?:subscription|installment).*monthly/i.test(message) && money != null) { plan.operation = 'budget_allocate'; plan.expenseDelta = money; delete plan.purchase; }
   if (plan.operation === 'period_forecast') plan.forecastKind = /save|saving/i.test(message) ? 'savings' : 'balance';
-  const named = facts.goals.filter(goal => mentionsGoal(message, goal.name));
   if (named.length) plan.goalNames = named.slice(0, 4).map(goal => goal.name);
   if (!plan.goalNames && /(?:my|akong) (?:savings )?goal/i.test(message) && facts.goals.length === 1) plan.goalNames = [facts.goals[0].name];
   if (follow && bare) {
     const value = Number(bare[1].replaceAll(',', ''));
     const missing = executeFinancialPlan(previous!.plan, facts).missing[0];
-    const fields: Record<string, keyof FinancialPlan> = { target_price: 'target', saved_balance: 'saved', contribution: 'contribution', purchase_price: 'purchase', essential_daily: 'essentialDaily', protected_cash: 'protectedCash', debt_payment: 'payment' };
-    const key = fields[missing]; if (key) Object.assign(plan, { [key]: value });
+    const fields: Record<string, keyof FinancialPlan> = { target_price: 'target', cheaper_target: 'target', saved_balance: 'saved', contribution: 'contribution', purchase_price: 'purchase', essential_daily: 'essentialDaily', protected_cash: 'protectedCash', debt_payment: 'payment', full_cost: 'target', alternative_cost: 'alternativeCost', scenario_income: 'income', new_income: 'newIncome', meal_cost: 'unitCost', replacement_cost: 'replacementCost' };
+    const key = missing === 'original_target' ? 'alternativeCost' : fields[missing]; if (key) Object.assign(plan, { [key]: value });
   }
   if (follow && /^\d{4}-\d{2}-\d{2}$/.test(message)) {
     if (incomplete[0] === 'next_payday' || incomplete[0] === 'future_payday') plan.nextPayday = message;
@@ -121,25 +150,33 @@ export function localFinancialPlan(message: string, facts: AdviceFacts, previous
     Object.assign(plan, stated);
   }
   const today = facts.planning ? businessDateLabel(new Date(facts.planning.asOf)) : businessDateLabel();
+  if (plan.operation === 'period_forecast' && /end of the year/i.test(message)) plan.until = `${Number(today.slice(0, 4)) + 1}-01-01`;
   if (/this year/i.test(message)) { plan.from = today.slice(0, 4) + '-01-01'; plan.until = today; }
   if (/this week\b/i.test(message) && ['category_spending', 'spending_compare', 'history_peak'].includes(plan.operation)) { const offset = (new Date(today).getUTCDay() + 6) % 7; plan.from = new Date(Date.parse(today) - offset * 86400000).toISOString().slice(0, 10); plan.until = today; }
   if (/within one year|in one year/i.test(message)) plan.until = addMonths(today, 12);
   if (/in six months/i.test(message)) plan.until = addMonths(today, 6);
   if (/in two years/i.test(message)) plan.until = addMonths(today, 24);
-  Object.assign(plan, explicitPlanningInputs(message, plan.frequency));
+  Object.assign(plan, naturalPlanningInputs(message, facts, plan), explicitPlanningInputs(message, plan.frequency));
+  if (purchaseImpact) {
+    if (explicit.withdrawal != null && explicit.withdrawal === plan.purchase) plan.purchaseFunding = 'goal_savings';
+    if (stated.target === plan.purchase && explicit.target == null) delete plan.target;
+  }
   return planSchema.parse(plan);
 }
 
 function isPlanningDetailReply(message: string, facts: AdviceFacts, previous: PlanningContext | null, local: FinancialPlan | null) {
+  if (previous && local?.operation === previous.plan.operation && isStructuredPlanningReply(message)) return true;
   if (!previous?.plan.operation.startsWith('goal_') || !local?.operation.startsWith('goal_')
     || changesPlanningTopic(message) || isExplicitFinancialAction(message) || isRecordedFinanceQuery(message)
     || /^(?:how|why|what|which|when|can|could|will|should|is|are|do)\b/i.test(message)) return false;
   const stated = statedGoalInputs(message);
+  if ((previous.plan.goalChangeKind === 'purchase' || previous.plan.purchase != null) && (statedPurchaseGoalInputs(message).purchaseFunding
+    || facts.goals.some(goal => mentionsGoal(message, goal.name)))) return true;
   if (Object.keys(stated).length) return true;
   if (Object.keys(explicitPlanningInputs(message, previous.plan.frequency)).length) return true;
   const missing = executeFinancialPlan(previous.plan, facts).missing;
   if (/^\s*(?:₱|php\s*)?\d[\d,]*(?:\.\d{1,2})?\s*$/i.test(message)
-    && ['target_price', 'saved_balance', 'contribution'].includes(missing[0])) return true;
+    && ['target_price', 'purchase_price', 'saved_balance', 'contribution'].includes(missing[0])) return true;
   const amounts = [...message.matchAll(/(?:₱|php\s*)(\d+(?:,\d{3})*(?:\.\d{1,2})?)/gi)];
   // Product model/capacity numbers never supply the price. A single monetary
   // amount answers a pending price question without asking the model to choose
@@ -157,6 +194,18 @@ function repairPlanningHistory(history: PlanningHistoryTurn[], facts: AdviceFact
     if (!stored) {
       if (!isRecordedFinanceQuery(turn.question)) previous = null;
       return turn;
+    }
+    if (stored.plan.operation.startsWith('goal_') && !stored.plan.goalNames?.length) {
+      const named = facts.goals.filter(goal => mentionsGoal(turn.question, goal.name));
+      if (named.length && named.length <= 4) {
+        const repaired = { ...stored, plan: { ...stored.plan, goalNames: named.map(goal => goal.name) } };
+        previous = repaired;
+        return { ...turn, pendingAction: repaired };
+      }
+    }
+    if (isPurchaseGoalImpact(turn.question) && stored.plan.operation === 'goal_change' && stored.plan.purchase == null) {
+      const repaired = localFinancialPlan(turn.question, facts);
+    if (repaired?.goalChangeKind === 'purchase') { previous = { ...stored, plan: repaired }; return { ...turn, pendingAction: previous }; }
     }
     if (!stored.plan.operation.startsWith('goal_') && previous?.plan.operation.startsWith('goal_')) {
       const local = localFinancialPlan(turn.question, facts, previous);
@@ -177,6 +226,24 @@ function repairPlanningHistory(history: PlanningHistoryTurn[], facts: AdviceFact
 export function verifyExtractedPlan(candidate: unknown, message: string, local: FinancialPlan): FinancialPlan {
   if (/\bUSD\b|dollars|\$/i.test(message) && !/\bPHP\b|₱/i.test(message)) throw new Error('CLARIFY_PHP_AMOUNT');
   const parsed = planSchema.parse(candidate);
+  // Current-user role parsing and recorded-date derivations cannot be replaced
+  // by plausible model guesses or a different category/savings interpretation.
+  for (const key of ['goalMode', 'goalPurpose', 'reviewKind', 'debtMode', 'needsIncomeChange', 'usesRecordedGoal', 'finishMonthsEarlier', 'sincePayday', 'subscriptionSelection', 'desiredSaving', 'daysPerWeek', 'category', 'dailyFood', 'dailyTransport', 'schoolDays'] as const) {
+    if (parsed[key] != null && parsed[key] !== local[key]) throw new Error('CONFLICTING_PLANNING_INPUT');
+  }
+  for (const key of ['periods', 'skipPeriods', 'percentCut', 'emergencyMonths', 'weekdays', 'billNames'] as const) {
+    if (parsed[key] != null && JSON.stringify(parsed[key]) !== JSON.stringify(local[key])) throw new Error('UNSUPPORTED_PLANNING_COUNT_OR_SELECTION');
+  }
+  if (local.operation.startsWith('goal_') && local.operation !== 'goal_change'
+    && [parsed.purchase, parsed.purchaseFunding, parsed.goalChangeKind].some(value => value != null)) {
+    throw new Error('CONFLICTING_PURCHASE_INPUT');
+  }
+  if (local.operation === 'goal_change' && (local.goalChangeKind === 'purchase' || local.purchase != null)) {
+    for (const key of ['purchase', 'purchaseFunding', 'goalChangeKind', 'target', 'saved', 'contribution', 'delta', 'withdrawal', 'periods', 'skipPeriods'] as const) {
+      if (parsed[key] != null && parsed[key] !== local[key]) throw new Error('CONFLICTING_PURCHASE_INPUT');
+    }
+  }
+  if (local.operation === 'cost_plan' && parsed.costMode != null && parsed.costMode !== local.costMode) throw new Error('CONFLICTING_COST_INTENT');
   const intent = clearPlanningIntent(message);
   if (intent === local.operation && parsed.operation !== intent) throw new Error('CONFLICTING_PLANNING_OPERATION');
   const explicit = explicitPlanningInputs(message, local.frequency);
@@ -191,12 +258,15 @@ export function verifyExtractedPlan(candidate: unknown, message: string, local: 
     }
     if (stated.target == null && (stated.saved != null || stated.contribution != null) && parsed.target != null && parsed.target !== local.target) throw new Error('SAVINGS_IS_NOT_PRICE');
     const roles = ['target', 'saved', 'contribution', 'delta'] as const;
+    const knownRoles = { ...stated };
+    if (local.operation === 'goal_change' && local.delta != null) knownRoles.delta = local.delta;
     for (const key of roles) if (parsed[key] != null && parsed[key] !== local[key]
-      && roles.some(role => role !== key && stated[role] != null && stated[role] === parsed[key] && stated[key] == null)) throw new Error('CONFLICTING_AMOUNT_ROLE');
+      && roles.some(role => role !== key && knownRoles[role] != null && knownRoles[role] === parsed[key] && knownRoles[key] == null)) throw new Error('CONFLICTING_AMOUNT_ROLE');
   }
   if (parsed.frequency && parsed.frequency !== local.frequency && parsed.frequency !== statedFrequency(message)) throw new Error('UNSUPPORTED_CONTRIBUTION_FREQUENCY');
   if (parsed.goalNames?.some(name => !local.goalNames?.includes(name) && !mentionsGoal(message, name))) throw new Error('UNSUPPORTED_GOAL_SELECTION');
-  const moneyKeys = ['target', 'saved', 'contribution', 'delta', 'withdrawal', 'purchase', 'income', 'incomeDelta', 'expenseDelta', 'essentialDaily', 'protectedCash', 'newSaving', 'bonus', 'bonusToDebt', 'payment', 'feePerPeriod', 'dailyFood', 'dailyTransport', 'otherCosts', 'unitCost', 'replacementCost', 'alternativeCost'] as const;
+  if (local.operation === 'school_budget' && parsed.income != null && parsed.income !== local.income) throw new Error('CONFLICTING_ALLOWANCE_INPUT');
+  const moneyKeys = ['target', 'saved', 'contribution', 'delta', 'withdrawal', 'purchase', 'income', 'newIncome', 'incomeDelta', 'expenseDelta', 'essentialDaily', 'protectedCash', 'newSaving', 'bonus', 'bonusToDebt', 'payment', 'feePerPeriod', 'dailyFood', 'dailyTransport', 'otherCosts', 'unitCost', 'replacementCost', 'alternativeCost', 'desiredSaving'] as const;
   const labels = [...moneyKeys, 'price', 'cost', 'worth', 'save', 'saving', 'salary', 'allowance', 'pay', 'food', 'fare', 'transport', 'fees'].join('|');
   const amountPattern = new RegExp(`(?:₱|php\\s*|\\b(?:${labels})["']?\\s*(?:is|of|at|:|=)?\\s*)(-?\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b`, 'gi');
   const literals = [...message.matchAll(amountPattern)].map(m => Number(m[1].replaceAll(',', '')));
@@ -214,6 +284,7 @@ export function verifyExtractedPlan(candidate: unknown, message: string, local: 
 export async function answerFinancialPlan(message: string, facts: AdviceFacts, owner: string,
   history: PlanningHistoryTurn[],
   dependencies?: { generate: Generate; reserve: (units: number) => Promise<void>; response?: ResponseDependencies }) {
+  message = normalizeChatQuestion(message);
   history = repairPlanningHistory(history, facts, owner);
   let previous: PlanningContext | null = null;
   let previousIndex = history.length - 1;
@@ -229,7 +300,11 @@ export async function answerFinancialPlan(message: string, facts: AdviceFacts, o
     for (let index = previousIndex; index >= 0; index--) {
       const turn = history[index], stored = readPlanningContext(turn.pendingAction, owner);
       if (!stored) { if (isRecordedFinanceQuery(turn.question)) continue; break; }
+      // Corrected saved plans start a new scenario even when an older wrong
+      // purchase answer happened to retain the same target and goal names.
       if (!stored.plan.operation.startsWith('goal_')
+        || (stored.plan.goalChangeKind === 'purchase' || stored.plan.purchase != null)
+          !== (previous.plan.goalChangeKind === 'purchase' || previous.plan.purchase != null)
         || JSON.stringify(stored.plan.goalNames) !== JSON.stringify(previous.plan.goalNames)
         || (stored.plan.target != null && previous.plan.target != null && stored.plan.target !== previous.plan.target)) break;
       statements.unshift({ question: turn.question, plan: stored.plan });
@@ -243,7 +318,7 @@ export async function answerFinancialPlan(message: string, facts: AdviceFacts, o
   const detailReply = isPlanningDetailReply(message, facts, previous, local);
   let plan = local, model = 'local-financial-planner-v1';
   const usage = { prompt: 0, response: 0, total: 0 };
-  if (!detailReply && (process.env.GEMINI_API_KEY || dependencies)) {
+  if (!detailReply && conversationFollowUp(message) !== 'retry' && (process.env.GEMINI_API_KEY || dependencies)) {
     // Names only; prices/amounts are resolved by tools, never extracted from a
     // model's general knowledge or an old assistant answer.
     const entities = { goals: facts.goals.map(goal => ({ name: goal.name })), categories: [...new Set(facts.planning?.spending.map(row => row.category) ?? [])].slice(0, 40) };

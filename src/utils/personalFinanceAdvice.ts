@@ -2,7 +2,8 @@ import { roundMoney, WEEKS_PER_MONTH } from './money';
 import type { SafeToSpendBreakdown } from './safeToSpend';
 import { z } from 'zod';
 import type { PlanningFacts } from './planningFacts';
-import { statedRecurringAmount } from './planningInputs';
+import { statedRecurringAmount, isWalletBalanceLookup, isRecordedIncomeExpenseLookup } from './planningInputs';
+import { businessDateLabel } from './calendar';
 
 export type PersonalTopic = 'timeline' | 'savings' | 'income' | 'spending' | 'budget' | 'debts' | 'bills' | 'accounts' | 'safe-to-spend';
 export interface AdviceFacts {
@@ -23,9 +24,9 @@ const monthAmount = (amount: number, period: 'weekly' | 'monthly') => roundMoney
 export function personalQuestionTopic(message: string): PersonalTopic | null {
   if (!isExplicitFinancialAction(message) && statedAllocation(message) && /\b(?:save|saving|set aside|put aside)\b/i.test(message)) return 'timeline';
   if (/^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:log|record|add|transfer|move|pay|save|undo|correct)\b/i.test(message)) return null;
-  if (!/^(?:how|why|what|which|when|can|could|is|are|do|does|would|will|show|tell|explain|ano|ilang|kailan|bakit|paano|magkano)\b/i.test(message)) return null;
+  if (!/^(?:how|why|what|which|when|can|could|is|are|do|does|would|will|show|tell|explain|ano|ilang|kailan|bakit|paano|magkano|ngano(?:ng)?|unsa(?:y|on)?|pila|asa|kanus.a)\b/i.test(message)) return null;
   if (/how (?:long|soon)|how many (?:months|weeks|years)|when|ilang (?:buwan|taon)|kailan/i.test(message) && /buy|afford|save|savings|goal|phone|bili|ipon/i.test(message)) return 'timeline';
-  if (/safe.?to.?spend|how much can i spend/i.test(message)) return 'safe-to-spend';
+  if (/safe[\s-]*to[\s-]*spend|how much can i spend/i.test(message)) return 'safe-to-spend';
   if (/savings?|goals?|fund|ipon/i.test(message)) return 'savings';
   if (/budget/i.test(message)) return 'budget';
   if (/debts?|loans?|owe|utang/i.test(message)) return 'debts';
@@ -111,11 +112,15 @@ export function transactionExplanation(message: string): string | null {
     ? 'A transaction is a financial entry you record, such as received income, an expense, a transfer or a savings contribution. Asking about an item price or a savings timeline does not record a purchase or move money.' : null;
 }
 
-export function conversationFollowUp(message: string): 'simple' | 'why' | 'next' | 'faster' | null {
-  if (/\b(?:don[’']?t|dont|do not|didn[’']?t|didnt)\s+(?:get|understand)|\b(?:confused|simpler|simply|simple terms|simplify|plain english|beginner|explain again|explain (?:that|it|this)|what does (?:that|it|this) mean|what do (?:you|u) mean|hindi ko (?:gets|maintindihan))\b|^what[?!\s]*$/i.test(message)) return 'simple';
-  if (/^(?:why|bakit)\b|\bhow (?:did you|is that|come)|\bwhere did .+ come from/i.test(message)) return 'why';
+export function conversationFollowUp(message: string): 'simple' | 'why' | 'next' | 'faster' | 'retry' | null {
+  // These are requests to address the preceding question, not new financial
+  // inputs or permission to replay an action. Keep the match to whole short
+  // utterances so a new question or command still determines its own intent.
+  if (/^(?:(?:i[’']?m|im|i am) asking(?: you)?|(?:please )?(?:answer|respond to) (?:my|the) question(?: please)?|(?:you )?(?:did(?:n[’']?t|nt)|did not|haven[’']?t|have not) answer(?:ed)?(?: my question)?|(?:that[’']?s|that is|this is|this[’']?s) not what i asked|(?:you(?:[’']?re| are)? )?(?:stupid|dumb|useless)|sayop(?: gihapon)?(?: imong tubag)?|pataka(?: lang)?(?: ka)?(?: ug tubag)?)[?!.\s]*$/i.test(message.trim())) return 'retry';
+  if (/\b(?:don[’']?t|dont|do not|didn[’']?t|didnt)\s+(?:get|understand)|\b(?:confused|simpler|simply|simple terms|simplify|plain english|beginner|explain again|explain (?:that|it|this)|what does (?:that|it|this) mean|what do (?:you|u) mean|hindi ko (?:gets|maintindihan)|wala ko kasabot|wa ko kasabot|wako kasabot)\b|^what[?!\s]*$/i.test(message)) return 'simple';
+  if (/^(?:why|bakit|ngano(?:ng)?)\b|\bhow (?:did you|is that|come)|\bwhere did .+ come from/i.test(message)) return 'why';
   if (/\b(?:faster|sooner|shorten|speed up|too long|quicker)\b/i.test(message)) return 'faster';
-  if (/^(?:how|paano)[?!\s]*$|\b(?:what (?:now|next)|next steps?|what should i do|how do i (?:do|start)|step by step|guide me)\b/i.test(message)) return 'next';
+  if (/^(?:how|paano)[?!\s]*$|^unsaon(?: mana| na| ni)?[?!\s]*$|\b(?:what (?:now|next)|next steps?|what should i do|how do i (?:do|start)|step by step|guide me)\b/i.test(message)) return 'next';
   return null;
 }
 
@@ -209,6 +214,23 @@ function timelineReply(message: string, facts: AdviceFacts) {
 
 export function personalFinanceReply(topic: PersonalTopic, message: string, facts: AdviceFacts): string {
   const b = facts.breakdown;
+  if (isWalletBalanceLookup(message)) {
+    const liquid = facts.accounts.filter(account => account.kind === 'ASSET' && ['CASH', 'BANK', 'EWALLET'].includes(account.accountType ?? ''));
+    const borrowed = facts.accounts.filter(account => account.kind === 'LIABILITY' || ['LOAN', 'CREDIT_CARD'].includes(account.accountType ?? ''));
+    const available = roundMoney(liquid.reduce((sum, account) => sum + Math.max(0, account.balance), 0));
+    const personalDebt = roundMoney(facts.loans.filter(loan => loan.type === 'BORROWED').reduce((sum, loan) => sum + loan.remaining, 0));
+    return `Your recorded accessible wallet balances total ${php(available)}.${liquid.length ? `\n${liquid.map(account => `• ${account.name}: ${php(account.balance)}.`).join('\n')}` : '\nNo accessible cash, bank or e-wallet accounts are recorded.'}\n\nLoan, credit and liability accounts are excluded from available cash.${borrowed.length ? `\n${borrowed.map(account => `• ${account.name}: ${php(account.balance)} (excluded).`).join('\n')}` : ''}\nRemaining recorded personal loans borrowed: ${php(personalDebt)}. These balances are separate from Safe-to-Spend and do not prove a purchase is affordable.`;
+  }
+  if (isRecordedIncomeExpenseLookup(message)) {
+    if (/this month/i.test(message) && facts.planning) {
+      const today = businessDateLabel(new Date(facts.planning.asOf));
+      const entries = facts.planning.spending.filter(row => row.date.startsWith(today.slice(0, 7)) && row.date <= today);
+      const income = roundMoney(entries.filter(row => row.type === 'INCOME').reduce((sum, row) => sum + row.amount, 0));
+      const spending = roundMoney(entries.filter(row => ['EXPENSE', 'BILL_PAYMENT', 'DEBT_PAYMENT'].includes(row.type)).reduce((sum, row) => sum + row.amount, 0));
+      return `This month through ${today}, your recorded received income is ${php(income)} and recorded expenses are ${php(spending)}, including bill and debt payments. Planned income, opening balances and transfers are excluded. Missing entries do not prove zero real income or expenses.`;
+    }
+    return `For your current ${facts.incomePeriod === 'weekly' ? 'weekly' : 'monthly'} income period, recorded received income is ${php(b.actualIncome)} and recorded expenses are ${php(b.totalExpenses)}, including bill and debt payments. Planned income, opening balances and transfers are excluded. Missing entries do not prove zero real income or expenses.`;
+  }
   if (topic === 'timeline') return timelineReply(message, facts);
   if (topic === 'income') return `Your planned income is ${php(b.configuredIncome)} per ${facts.incomePeriod === 'weekly' ? 'week' : 'month'} (${php(monthAmount(b.configuredIncome, facts.incomePeriod))} monthly equivalent). You recorded ${php(b.actualIncome)} of received income this period. Safe-to-Spend uses received income, not the plan. If you have received money, record an income transaction in the correct account.`;
   if (topic === 'savings') return facts.goals.length ? `Your saved goals:\n${facts.goals.map(goal => `• ${goal.name}: ${php(goal.saved)} of ${php(goal.target)}; monthly allocation ${php(goal.monthlyAllocation)}.`).join('\n')}\nAllocations are plans; saved balances come from recorded contributions.` : 'You have no saved savings goals. Add a target and monthly allocation in Budget & Goals, then record contributions when you actually save money.';

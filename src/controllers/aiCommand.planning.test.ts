@@ -42,7 +42,9 @@ test('the screenshot conversation survives persisted sessions and history reload
   const tx = {
     user: { findUniqueOrThrow: async () => ({ trialStartedAt: now }) },
     $queryRawUnsafe: async (_sql: string, userId: string) => { assert.equal(userId, owner); return [{ id: owner }]; },
-    subscription: { findUnique: scopedRead(() => null) },
+    // The screenshot account has Plus access. Keep sufficient fixture usage for
+    // the longer read-only regression conversation; no real quota is changed.
+    subscription: { findUnique: scopedRead(() => ({ plan: 'PLUS', status: 'ACTIVE', currentPeriodEnd: new Date(now.getTime() + 30 * 86_400_000) })) },
     usagePeriod: {
       upsert: async (args: any) => { assert.equal(args.where.userId_periodStart.userId, owner); return { id: 'test-usage', aiRequests: charges }; },
       update: async () => ({ id: 'test-usage', aiRequests: ++charges }),
@@ -128,4 +130,83 @@ test('the screenshot conversation survives persisted sessions and history reload
   const correction = await invoke(processAiChat, { message: '1000, every month' });
   assert.equal(correction.calculation.values.recordedSpending, 1600);
   assert.equal(correction.calculation.values.periods, 195);
+  const originalProfile = prisma.user.findUniqueOrThrow;
+  prisma.user.findUniqueOrThrow = (async (args: any) => {
+    assert.deepEqual(args, { where: { id: owner }, select: { firstName: true, lastName: true } });
+    return { firstName: 'Synthetic', lastName: 'Owner' };
+  }) as typeof prisma.user.findUniqueOrThrow;
+  t.after(() => { prisma.user.findUniqueOrThrow = originalProfile; });
+  const identity = await invoke(processAiChat, { message: 'Who am I?', userId: 'another-owner' });
+  assert.match(identity.content, /You are Synthetic Owner/);
+  assert.equal(identity.model, 'local-account-identity-v1');
+  assert.deepEqual(identity.knowledgeSources, []);
+  assert.equal(sessions.at(-1).userId, owner);
+  const phone = await invoke(processAiChat, { message: 'how long will it take for me to buy latest iphone 18 promax 194,000 if i save 10000 a month' });
+  assert.equal(phone.calculation.values.target, 194000);
+  assert.equal(phone.calculation.values.contribution, 10000);
+  assert.deepEqual(phone.calculation.missing, ['saved_balance']);
+  const profileDuringPlan = await invoke(processAiChat, { message: 'kinsa ko?' });
+  assert.match(profileDuringPlan.content, /Ikaw si Synthetic Owner/);
+  assert.equal(profileDuringPlan.requiresClarification, true);
+  assert.equal(profileDuringPlan.clarificationType, 'planning');
+  assert.equal(profileDuringPlan.id, phone.id);
+  assert.equal(sessions.find(row => row.id === phone.id).state, 'NEEDS_CLARIFICATION');
+  const zero = await invoke(processAiChat, { message: 'I have not saved anything yet', clarificationId: phone.id });
+  assert.equal(zero.calculation.values.periods, 20);
+  assert.deepEqual(zero.calculation.missing, []);
+  const explanation = await invoke(processAiChat, { message: 'nganong 0 ang safe to spend?' });
+  assert.match(explanation.content, /received income ₱0\.00/);
+  assert.doesNotMatch(explanation.content, /next confirmed payday|I can help with/);
+  const savedProfile = (await invoke(getAiHistory)).find((row: any) => row.model === 'local-account-identity-v1');
+  assert.ok(savedProfile);
+  assert.match(savedProfile.answer, /Synthetic Owner/);
+  // Copying the suggested samples includes their quotes/list markers. Preserve
+  // the exact original text while routing by the normalized read-only question.
+  const copiedIdentity = '“Who am I? Use my saved profile in this system.”';
+  const copiedProfile = await invoke(processAiChat, { message: copiedIdentity, userId: 'another-owner' });
+  assert.match(copiedProfile.content, /You are Synthetic Owner/);
+  assert.equal(copiedProfile.model, 'local-account-identity-v1');
+  assert.equal(sessions.at(-1).question, copiedIdentity);
+  const copiedPhone = '1. “My phone target costs ₱194,000. I have saved ₱0 for it. If I save ₱10,000 every month, how many contributions will I need?”';
+  const completePhone = await invoke(processAiChat, { message: copiedPhone });
+  assert.equal(completePhone.calculation.operation, 'goal_timeline');
+  assert.equal(completePhone.calculation.values.periods, 20);
+  assert.equal(completePhone.calculation.values.saved, 0);
+  assert.equal(completePhone.requiresClarification, false);
+  assert.equal(sessions.at(-1).question, copiedPhone);
+  const increased = await invoke(processAiChat, { message: '“What if I save ₱15,000 monthly instead?”' });
+  assert.equal(increased.calculation.values.target, 194000);
+  assert.equal(increased.calculation.values.saved, 0);
+  assert.equal(increased.calculation.values.periods, 13);
+  const namedDate = await invoke(processAiChat, { message: '“My first contribution will be on October 15, 2026. What is my completion date?”' });
+  assert.equal(namedDate.calculation.values.completionDate, '2027-10-15');
+  const copiedHistory = await invoke(getAiHistory);
+  assert.equal(copiedHistory.at(-1).contextMetadata.calculation.values.completionDate, '2027-10-15');
+  assert.equal(copiedHistory.at(-1).pendingAction.plan.target, 194000);
+  assert.equal(copiedHistory.at(-1).pendingAction.plan.contribution, 15000);
+
+  // The frustrated follow-ups in the latest screenshots must use the actual
+  // preceding usage question, including after a database/history reload.
+  const usage = await invoke(processAiChat, { message: 'how to use casha-ba?' });
+  assert.match(usage.content, /Money → Wallet & Accounts/);
+  for (const message of ['im asking', 'stupid']) {
+    const retry = await invoke(processAiChat, { message });
+    assert.match(retry.content, /Money → Wallet & Accounts/, message);
+    assert.doesNotMatch(retry.content, /What would you like|I apologize|I am here to help/, message);
+    assert.equal(sessions.at(-1).pendingAction.originalQuestion, 'how to use casha-ba?');
+    const history = await invoke(getAiHistory);
+    assert.equal(history.at(-1).pendingAction.originalQuestion, 'how to use casha-ba?');
+  }
+  const preview = { id: 'unconfirmed-expense', userId: owner, question: 'Spent 100 on fare from Cash today',
+    answer: 'Expense: ₱100.00 · Transport · Cash · today', state: 'AWAITING_CONFIRMATION', createdAt: now,
+    pendingAction: { intent: 'LOG_TRANSACTION', type: 'EXPENSE', amount: 100, category: 'Transport', walletName: 'Cash' } };
+  sessions.push(preview);
+  for (const message of ['im asking', 'stupid']) {
+    const reply = await invoke(processAiChat, { message });
+    assert.equal(reply.id, preview.id);
+    assert.equal(reply.requiresConfirmation, true);
+    assert.match(reply.content, /No money or records have changed yet/);
+    assert.match(reply.content, /Your action is still awaiting confirmation/);
+    assert.equal(preview.state, 'AWAITING_CONFIRMATION', 'Frustration is not confirmation');
+  }
 });

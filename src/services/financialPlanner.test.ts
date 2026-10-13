@@ -5,10 +5,72 @@ import { completeFacts, missingFacts } from '@/evaluation/planningFixtures';
 import { executeFinancialPlan, type PlanningContext } from '@/utils/financialPlanner';
 import { statedGoalInputs } from '@/utils/planningInputs';
 import { coreReply } from '@/utils/coreConversation';
+import { boundedHistory } from './aiRuntime';
 import { answerFinancialPlan, localFinancialPlan, verifyExtractedPlan } from './financialPlanner';
 
 const offline = { reserve: async () => {}, generate: async (): Promise<GenerateContentResponse> => { throw { status: 403 }; } };
 const context = (plan: PlanningContext['plan']): PlanningContext => ({ kind: 'FINANCIAL_PLAN_V1', owner: 'owner-a', updatedAt: new Date().toISOString(), plan });
+
+test('Safe-to-Spend explanations bypass purchase planning and its unrelated payday questions', async () => {
+  const facts = completeFacts();
+  for (const question of ['Why is my Safe-to-Spend zero?', 'What is Safe to Spend?', 'nganong 0 ang safe to spend?', 'unsa ang safe to spend?', 'Explain my Safe-to-Spend']) {
+    assert.equal(localFinancialPlan(question, facts), null, question);
+    assert.equal(await answerFinancialPlan(question, facts, 'owner-a', [], offline), null, question);
+  }
+  assert.equal(localFinancialPlan('How much can I spend until payday?', facts)?.operation, 'cash_available');
+  assert.equal(localFinancialPlan('Can I buy a PHP 30000 phone today?', facts)?.operation, 'afford_purchase');
+});
+
+test('the supplied iPhone price and monthly saving survive a provider outage and saved-balance follow-up', async () => {
+  const facts = completeFacts(), before = JSON.stringify(facts);
+  const question = 'how long will it take for me to buy latest iphone 18 promax 194,000 if i save 10000 a month';
+  const first = await answerFinancialPlan(question, facts, 'owner-a', [], offline);
+  assert.ok(first);
+  assert.equal(first.result.operation, 'goal_timeline');
+  assert.equal(first.context.plan.target, 194000);
+  assert.equal(first.context.plan.contribution, 10000);
+  assert.equal(first.context.plan.frequency, 'monthly');
+  assert.deepEqual(first.result.missing, ['saved_balance']);
+  assert.doesNotMatch(first.content, /What is the target price|How much can you afford to save/);
+  const identity = { question: 'Who am I?', answer: 'You are Synthetic Owner, the signed-in user.' };
+  const final = await answerFinancialPlan('I have not saved anything yet', facts, 'owner-a', [
+    { question, answer: first.content, pendingAction: first.context }, identity,
+  ], offline);
+  assert.ok(final);
+  assert.equal(final.result.values.periods, 20);
+  assert.equal(final.result.values.remaining, 194000);
+  assert.deepEqual(final.result.missing, []);
+  assert.match(final.content, /20 monthly contribution/);
+  assert.doesNotMatch(final.content, /How much is already saved/);
+  assert.equal(JSON.stringify(facts), before);
+  assert.deepEqual(boundedHistory([identity]), []);
+  for (const invalid of ['How long to buy iPhone 18 Pro Max 2TB if I save 10,000 a month?', 'How long to buy iPhone -194,000 if I save 10000 a month?', 'How long to buy iPhone 1,024GB if I save 10000 a month?']) {
+    assert.equal(statedGoalInputs(invalid).target, undefined, invalid);
+  }
+});
+
+test('month-end forecast uses accessible wallets and recorded pace, with an actual last-day horizon', async () => {
+  const facts = completeFacts();
+  const question = 'If I keep my current spending habits, what will my balance look like at the end of the month?';
+  const answer = await answerFinancialPlan(question, facts, 'owner-a', [], offline);
+  assert.ok(answer);
+  assert.equal(answer.result.operation, 'period_forecast');
+  assert.equal(answer.result.values.estimatedSpending, 14662.5);
+  assert.equal(answer.result.values.estimatedBalance, 35337.5);
+  assert.match(answer.content, /2026-10-31/);
+  assert.doesNotMatch(answer.content, /2026-11-01|against.*budget|leaving.*within the limit/);
+  assert.match(answer.content, /No future income is assumed/);
+  assert.equal(executeFinancialPlan(answer.context.plan, { ...facts, budget: { target: 1, spent: 999999 } }).values.estimatedBalance, 35337.5);
+  const missing = await answerFinancialPlan(question, missingFacts(), 'owner-a', [], offline);
+  assert.ok(missing?.requiresClarification);
+  assert.equal(missing.result.values.estimatedBalance, undefined);
+  const noAccounts = executeFinancialPlan(answer.context.plan, { ...facts, accounts: [] });
+  assert.ok(noAccounts.missing.includes('accessible_accounts'));
+  assert.equal(noAccounts.values.estimatedBalance, undefined);
+  const year = await answerFinancialPlan('How much could I save by the end of the year at my current pace?', facts, 'owner-a', [], offline);
+  assert.equal(year?.result.values.estimatedAdditional, 7350);
+  assert.match(year!.content, /2026-12-31/);
+});
 
 test('screenshot conversation retains price, accepts labeled savings, and understands nothing saved without Gemini', async () => {
   const facts = completeFacts(), before = JSON.stringify(facts);

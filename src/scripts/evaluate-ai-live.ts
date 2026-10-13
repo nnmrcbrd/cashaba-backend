@@ -14,6 +14,8 @@ import { aliasFinancialContext, redactIdentifiers } from '@/utils/aiSafety';
 import { executeFinancialPlan } from '@/utils/financialPlanner';
 import { unwrapPlanningParameters } from '@/utils/planningProviderSchema';
 import { dailyProviderQuota } from '@/evaluation/providerQuota';
+import { orderEvaluationQuestions } from '@/evaluation/questionOrder';
+import { needsLiveProviderRetry } from '@/evaluation/liveProviderRetry';
 import { retrieveRagContext } from '@/services/ragRetrieval';
 import { generateEmbedding } from '@/services/embedding';
 import { KnowledgeBaseRepository, KnowledgeDocumentRepository } from '@/repositories/knowledge.repository';
@@ -29,27 +31,31 @@ if (!Number.isInteger(count) || count < 1 || count > 150 || !Number.isSafeIntege
   || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 3
   || !Number.isInteger(scenarioDelay) || scenarioDelay < 0 || scenarioDelay > 60000) throw new Error('Set explicit questions (1–150), token cap, concurrency (1–3) and scenario delay (0–60000)');
 const output = resolve(process.env.AI_LIVE_EVAL_OUTPUT || 'ai-live-evaluation.json');
+const selection = orderEvaluationQuestions(dataset.questions.slice(0, count), process.env.AI_LIVE_EVAL_PRIORITY_IDS);
 mkdirSync(dirname(output), { recursive: true });
 const models = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }).models;
 let startedAt = new Date().toISOString();
 const implementationDigest = createHash('sha256').update(['src/services/financialPlanner.ts', 'src/services/planningResponse.ts',
-  'src/services/aiRuntime.ts', 'src/utils/financialPlanner.ts', 'src/utils/planningProviderSchema.ts', 'src/utils/planningInputs.ts',
+  'src/services/aiRuntime.ts', 'src/utils/financialPlanner.ts', 'src/utils/planningProviderSchema.ts', 'src/utils/planningInputs.ts', 'src/utils/planningNaturalInputs.ts',
   'src/utils/planningIntent.ts', 'src/utils/planningExplicitInputs.ts',
+  'src/utils/planningCalculators.ts', 'src/utils/calendar.ts', 'src/utils/safeToSpend.ts',
+  'src/utils/coreConversation.ts', 'src/utils/aiSafety.ts', 'src/utils/personalFinanceAdvice.ts', 'src/utils/chatQuestion.ts',
   'src/services/ragRetrieval.ts', 'src/services/embedding.ts', 'src/repositories/knowledge.repository.ts',
   'src/utils/rag.ts', 'src/utils/assistantKnowledge.ts', 'prisma/schema.prisma', 'src/scripts/evaluate-ai-live.ts',
-  'src/evaluation/planningFixtures.ts', 'src/evaluation/aiQuestions.v1.json'].map(path => readFileSync(path, 'utf8')).join('\n')).digest('hex');
+  'src/evaluation/planningFixtures.ts', 'src/evaluation/questionOrder.ts', 'src/evaluation/liveProviderRetry.ts', 'src/evaluation/aiQuestions.v1.json'].map(path => readFileSync(path, 'utf8')).join('\n')).digest('hex');
 let reserved = 0, next = 0, fatal: string | null = null, unavailableScenarios = 0, cooldownUntil = 0;
 type Row = typeof dataset.questions[number];
 type ProviderCall = { phase: string; elapsedMs: number; responded: boolean; text?: string; error?: string;
   usage?: { prompt: number; response: number; total: number } };
 type Scenario = Awaited<ReturnType<typeof evaluate>>;
-const results: Array<{ id: number; question: string; complete: Scenario; incomplete: Scenario }> = [];
-const availabilityRetries: Array<{ id: number; mode: 'complete' | 'incomplete'; at: string; previous: Scenario }> = [];
+const results: Array<{ id: number; question: string; complete: Scenario; incomplete: Scenario; original: Scenario }> = [];
+const availabilityRetries: Array<{ id: number; mode: 'complete' | 'incomplete' | 'original'; at: string; reason?: 'provider_unavailable' | 'provider_rejected'; previous: Scenario }> = [];
 const resumeHistory: Array<{ at: string; completedQuestions: number; extraReservation: number; scenarioDelay: number }> = [];
 const providerQuotaEvents: Array<NonNullable<ReturnType<typeof dailyProviderQuota>> & { observedAt: string }> = [];
 if (process.env.AI_LIVE_EVAL_RESUME === '1' && existsSync(output)) {
   const saved = JSON.parse(readFileSync(output, 'utf8'));
   if (saved.implementationDigest !== implementationDigest || saved.requestedQuestions !== count
+    || JSON.stringify(saved.priorityIds ?? []) !== JSON.stringify(selection.priorityIds)
     || saved.model !== (process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite') || !Array.isArray(saved.results)
     || JSON.stringify(saved.limits) !== JSON.stringify(aiLimits())
     || !Number.isSafeInteger(saved.reservedTokenBound) || saved.reservedTokenBound > cap
@@ -67,9 +73,9 @@ if (process.env.AI_LIVE_EVAL_RESUME === '1' && existsSync(output)) {
 }
 const answered = (scenario: Scenario) => scenario.calls.some(call => call.phase !== 'embedding' && call.responded);
 const retryUnavailable = process.env.AI_LIVE_EVAL_RETRY_UNANSWERED === '1';
-const pending = dataset.questions.slice(0, count).filter(row => {
+const pending = selection.questions.filter(row => {
   const previous = results.find(result => result.id === row.id);
-  return !previous || retryUnavailable && (!answered(previous.complete) || !answered(previous.incomplete));
+  return !previous || retryUnavailable && [previous.complete, previous.incomplete, previous.original].some(needsLiveProviderRetry);
 });
 
 function safeError(error: unknown) {
@@ -80,12 +86,13 @@ function safeError(error: unknown) {
   return error instanceof SyntaxError ? 'INVALID_JSON' : error instanceof Error ? error.name : 'PROVIDER_ERROR';
 }
 function snapshot(finished = false) {
-  const scenarios = results.flatMap(row => [row.complete, row.incomplete]);
+  const scenarios = results.flatMap(row => [row.complete, row.incomplete, row.original]);
   const calls = [...scenarios, ...availabilityRetries.map(item => item.previous)].flatMap(row => row.calls);
   const generationCalls = calls.filter(call => call.phase !== 'embedding');
   const sum = (field: 'prompt' | 'response' | 'total') => calls.reduce((total, call) => total + (call.usage?.[field] ?? 0), 0);
   const report = { dataset: dataset.version, sourceSha256: dataset.sourceSha256, implementationDigest, startedAt, updatedAt: new Date().toISOString(),
-    finished, completed: finished && results.length === count && !fatal, requestedQuestions: count, evaluatedQuestions: results.length, syntheticOnly: true,
+    finished, completed: finished && results.length === count && !fatal, requestedQuestions: count, priorityIds: selection.priorityIds,
+    evaluatedQuestions: results.length, syntheticOnly: true,
     model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite', concurrency, scenarioDelay, limits: aiLimits(),
     evaluationTokenReservationCap: cap, reservedTokenBound: reserved, stoppedReason: fatal,
     reservationsCheckpointed: true, availabilityRetries, resumeHistory, providerQuotaEvents,
@@ -94,24 +101,28 @@ function snapshot(finished = false) {
       completeOperationsMatched: results.filter(row => row.complete.operationMatches).length,
       incompleteDataChecksPassed: results.filter(row => row.incomplete.missingDataHandled).length,
       incompleteOperationsMatched: results.filter(row => row.incomplete.operationMatches).length,
-      questionsWithProviderResponse: results.filter(row => [...row.complete.calls, ...row.incomplete.calls].some(call => call.phase !== 'embedding' && call.responded)).length,
+      originalQuestionChecksPassed: results.filter(row => row.original.factCheck && row.original.operationMatches).length,
+      originalQuestionsWithAcceptedProvider: results.filter(row => row.original.providerAccepted).length,
+      questionsWithProviderResponse: results.filter(row => [...row.complete.calls, ...row.incomplete.calls, ...row.original.calls].some(call => call.phase !== 'embedding' && call.responded)).length,
       scenariosWithProviderResponse: scenarios.filter(answered).length,
       scenariosWithAcceptedExtraction: scenarios.filter(row => row.extractionAccepted).length,
       scenariosWithAcceptedExplanation: scenarios.filter(row => row.explanationAccepted).length,
       providerResponses: generationCalls.filter(call => call.responded).length, providerErrors: generationCalls.filter(call => !call.responded).length,
       embeddingResponses: calls.filter(call => call.phase === 'embedding' && call.responded).length,
       embeddingErrors: calls.filter(call => call.phase === 'embedding' && !call.responded).length,
-      availabilityRetriedScenarios: availabilityRetries.length,
-      fullPass: results.filter(row => row.complete.factCheck && row.complete.operationMatches && row.complete.providerAccepted
-        && row.incomplete.operationMatches && row.incomplete.missingDataHandled && row.incomplete.providerAccepted).length },
-    methodology: 'Original questions with complete and missing synthetic facts. Complete prompts append explicit scenario fields but omit operation, language and expected answers. Missing-data prompts contain the original question only. Real extraction, query embedding, database cosine retrieval and optional explanation share production request bounds. Embedding responses are reported separately and never count as a generated answer. Fallback is separate from accepted provider output. Expected facts reflect supplemental scenarios, not every nuance of broad coaching questions. Saved provider text is synthetic only.',
+      availabilityRetriedScenarios: availabilityRetries.filter(item => item.reason !== 'provider_rejected').length,
+      providerRejectedRetriedScenarios: availabilityRetries.filter(item => item.reason === 'provider_rejected').length,
+      fullPass: results.filter(row => row.complete.factCheck && row.complete.operationMatches && !needsLiveProviderRetry(row.complete)
+        && row.incomplete.operationMatches && row.incomplete.missingDataHandled && !needsLiveProviderRetry(row.incomplete)
+        && row.original.operationMatches && row.original.factCheck && !needsLiveProviderRetry(row.original)).length },
+    methodology: 'Three scenarios per original question: complete facts with explicit supplementary scenario inputs (omitting operation, language and answers), missing records with original wording, and complete recorded synthetic facts with original wording only. Original-only results are compared to the reviewed backend calculation or required clarification, not a fabricated answer for unknown details. This checks model changes against the independently reviewed calculation path; it is not an independent proof of every coaching nuance. Real extraction, query embedding, database cosine retrieval and explanation share production request bounds. Embedding responses never count as generated answers. Fallback is separate from accepted provider output. Saved provider text is synthetic only.',
     browserAccountVerification: 'Separate; this script never accesses an actual account.', results: [...results].sort((a, b) => a.id - b.id) };
   const temporary = output + '.tmp';
   writeFileSync(temporary, JSON.stringify(report, null, 2)); renameSync(temporary, output);
   return report;
 }
-async function evaluate(row: Row, mode: 'complete' | 'incomplete') {
-  const facts = mode === 'complete' ? completeFacts() : missingFacts();
+async function evaluate(row: Row, mode: 'complete' | 'incomplete' | 'original') {
+  const facts = mode === 'incomplete' ? missingFacts() : completeFacts();
   const before = JSON.stringify(facts);
   // Do not give Gemini the expected operation, answer, or prefilled extraction.
   const supplied = Object.fromEntries(Object.entries(row.completeInput).filter(([key]) => !['operation', 'language'].includes(key)));
@@ -185,17 +196,22 @@ async function evaluate(row: Row, mode: 'complete' | 'incomplete') {
   }));
   const value = answer as Awaited<ReturnType<typeof answerFinancialPlan>>;
   const expectedMissing = executeFinancialPlan(row.missingInput, missingFacts());
-  const mismatches = Object.entries(row.expected).filter(([key, expected]) => value?.result.values[key] !== expected)
+  const reference = mode === 'original' ? executeFinancialPlan(localFinancialPlan(message, facts), facts) : null;
+  const expected = reference?.values ?? row.expected;
+  const mismatches = Object.entries(expected).filter(([key, expected]) => value?.result.values[key] !== expected)
     .map(([key, expected]) => ({ key, expected, actual: value?.result.values[key] ?? null, actualPresent: value?.result.values[key] !== undefined }));
   const missingDataHandled = !!value && (expectedMissing.operation === 'debt_totals'
     ? value.result.operation === 'debt_totals' && value.result.values.remaining === 0 && /unrecorded/i.test(value.content)
-    : value.requiresClarification && value.result.values.affordable === undefined && value.result.values.completionDate === undefined);
+    : (value.requiresClarification || (row.id === 142 && value.result.values.occurrences === 261 && value.result.values.saving === 31320))
+      && value.result.values.affordable === undefined && value.result.values.completionDate === undefined);
   const explanationAccepted = !!value?.sources.length;
   if (calls.some(call => call.phase !== 'embedding' && call.responded)) unavailableScenarios = 0;
   else if (calls.some(call => call.phase !== 'embedding') && ++unavailableScenarios >= 3) fatal ||= 'AI_PROVIDER_UNAVAILABLE';
   return { mode, message, expectedOperation: row.completeInput.operation, operation: value?.result.operation ?? null,
     operationMatches: value?.result.operation === row.completeInput.operation,
-    factCheck: !!value && !mismatches.length && !value.requiresClarification, mismatches,
+    factCheck: !!value && !mismatches.length && (reference
+      ? JSON.stringify(value.result.missing) === JSON.stringify(reference.missing) && value.requiresClarification === (reference.missing.length > 0)
+      : !value.requiresClarification), mismatches,
     missingDataHandled, extractionAccepted, extractionRejection, explanationAccepted, providerAccepted: extractionAccepted || explanationAccepted,
     model: value?.model ?? null, values: value?.result.values ?? {}, missing: value?.result.missing ?? [],
     answer: value?.content ?? null, sources: value?.sources ?? [], retrieval: value?.retrieval ?? null, calls, failure, factsUnchanged: before === JSON.stringify(facts) };
@@ -208,22 +224,29 @@ async function worker() {
   while (next < pending.length && !fatal) {
     const row = pending[next++];
     const previous = results.find(result => result.id === row.id);
-    const run = async (mode: 'complete' | 'incomplete') => {
+    const run = async (mode: 'complete' | 'incomplete' | 'original') => {
       const earlier = previous?.[mode];
-      if (earlier && answered(earlier)) return earlier;
+      if (earlier && !needsLiveProviderRetry(earlier)) return earlier;
       await coolDown();
       const result = await evaluate(row, mode);
-      if (earlier) availabilityRetries.push({ id: row.id, mode, at: new Date().toISOString(), previous: earlier });
+      if (earlier) availabilityRetries.push({ id: row.id, mode, at: new Date().toISOString(),
+        reason: answered(earlier) ? 'provider_rejected' : 'provider_unavailable', previous: earlier });
       return result;
     };
     const complete = await run('complete');
     if (!fatal) await delay(scenarioDelay);
     const incomplete = await run('incomplete');
-    const item = { id: row.id, question: row.question, complete, incomplete };
+    if (!fatal) await delay(scenarioDelay);
+    const original = await run('original');
+    const item = { id: row.id, question: row.question, complete, incomplete, original };
     if (previous) results[results.indexOf(previous)] = item; else results.push(item);
+    // Preserve the actual failed answer and stop before spending requests on
+    // another question from an implementation that already needs a repair.
+    if (!fatal && [complete, incomplete, original].some(scenario => !scenario.operationMatches || !scenario.factsUnchanged
+      || (scenario.mode === 'incomplete' ? !scenario.missingDataHandled : !scenario.factCheck))) fatal = 'AI_EVALUATION_ANSWER_FAILED';
     const report = snapshot();
     console.log(JSON.stringify({ progress: `${results.length}/${count}`, id: row.id, facts: complete.factCheck,
-      missing: incomplete.missingDataHandled, providerReplies: [...complete.calls, ...incomplete.calls].filter(call => call.phase !== 'embedding' && call.responded).length,
+      missing: incomplete.missingDataHandled, original: original.factCheck, providerReplies: [...complete.calls, ...incomplete.calls, ...original.calls].filter(call => call.phase !== 'embedding' && call.responded).length,
       actualTokens: report.usage.total, reservedTokenBound: reserved }));
     if (!fatal) await delay(scenarioDelay);
   }

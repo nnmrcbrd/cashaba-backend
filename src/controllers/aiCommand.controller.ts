@@ -14,7 +14,8 @@ import { personalAdviceTurn, recoverAdviceContext, statedPlanningAmount, transac
 import { isCoreQuestion, readCoreContext, type CoreContext } from '@/utils/coreConversation';
 import { answerCoreQuestion } from '@/services/coreConversation';
 import { answerFinancialPlan } from '@/services/financialPlanner';
-import type { PlanningContext } from '@/utils/financialPlanner';
+import { readPlanningContext, type PlanningContext } from '@/utils/financialPlanner';
+import { isAccountIdentityQuestion } from '@/utils/planningInputs';
 import { aiLimits, boundedHistory, generateBounded } from '@/services/aiRuntime';
 
 const EXPENSE_CATEGORIES = ["Food & Dining", "Transport", "Utilities", "Housing", "Health", "Entertainment", "Education", "Shopping", "Bills", "Debt Payment", "Others"] as const;
@@ -410,13 +411,32 @@ export const processAiChat = async (req: Request, res: Response) => {
       });
       return res.json({ role: 'assistant', content: pending ? 'Cancelled. You can start a new request.' : 'You can start a new request.', timestamp: new Date() });
     }
+    if (isAccountIdentityQuestion(message)) {
+      if (req.body.clarificationId && req.body.clarificationId !== pending?.id) throw new FinancialError('This draft has changed. Refresh the conversation and try again.', 409);
+      chargedUsagePeriodId = (await consumeUsage(userId, 'aiRequests')).id;
+      // Identity comes only from the authenticated owner's profile, never the
+      // model, conversation labels or a user ID supplied in the request body.
+      const profile = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { firstName: true, lastName: true } });
+      const name = [profile.firstName, profile.lastName].filter(Boolean).join(' ').trim();
+      const identity = /kinsa|ngalan/i.test(message)
+        ? name ? `Ikaw si ${name}, ang naka-sign in sa Casha-Ba account karon.` : 'Walay ngalan nga naka-save sa imong Casha-Ba profile.'
+        : name ? `You are ${name}, the user signed in to this Casha-Ba account.` : 'Your Casha-Ba profile does not have a saved name.';
+      const awaitingConfirmation = pending?.state === 'AWAITING_CONFIRMATION';
+      const content = awaitingConfirmation ? `${identity}\n\nYour action is still awaiting confirmation:\n${pending.answer}` : identity;
+      const session = await saveTurn(userId, message, content, 'local-account-identity-v1', { prompt: 0, response: 0, total: 0 });
+      return res.json({ id: pending?.id ?? session.id, role: 'assistant', content, timestamp: session.createdAt,
+        requiresConfirmation: awaitingConfirmation, requiresClarification: pending?.state === 'NEEDS_CLARIFICATION',
+        clarificationType: pending?.state === 'NEEDS_CLARIFICATION' && readPlanningContext(pending.pendingAction, userId) ? 'planning' : null,
+        knowledgeSources: [], model: 'local-account-identity-v1' });
+    }
     const explanation = transactionExplanation(message);
     if (pending?.state === 'AWAITING_CONFIRMATION') {
       if (explanation || (!isExplicitFinancialAction(message) && isCoreQuestion(message))) {
         chargedUsagePeriodId = (await consumeUsage(userId, 'aiRequests')).id;
         const history = (await prisma.aiSession.findMany({ where: { userId, question: { not: { startsWith: '__DASHBOARD_INSIGHTS__:' } } }, orderBy: { createdAt: 'desc' }, take: 8 })).reverse();
         const facts = await loadAdviceFacts(userId);
-        const simple = conversationFollowUp(message) === 'simple';
+        const followUp = conversationFollowUp(message);
+        const simple = followUp === 'simple' || followUp === 'retry';
         const answer = explanation || simple ? { content: explanation || 'This is a preview of the entry you asked me to record. No money or records have changed yet. Choose Confirm and save only if the details below are correct.', model: 'local-finance-explanation-v2', usage: { prompt: 0, response: 0, total: 0 }, context: null } : isAdviceBoundaryRequest(message) ? { content: ADVICE_BOUNDARY_REPLY, model: 'local-policy-v1', usage: { prompt: 0, response: 0, total: 0 }, context: null } : await answerFinancialPlan(message, facts, userId, history) ?? await answerCoreQuestion(message, facts, history, readCoreContext(history.at(-1)?.pendingAction));
         const content = `${answer.content}\n\nYour action is still awaiting confirmation:\n${pending.answer}`;
         const knowledgeSources = 'sources' in answer ? answer.sources : [];

@@ -1,0 +1,10 @@
+# Use with the repository-root docker-compose.yaml; all paths resolve there.
+services:
+  backend:
+    build:
+      context: .
+      target: runtime
+  migrations:
+    build:
+      context: .
+      target: migrations

@@ -14,6 +14,7 @@
     "lint:fix": "eslint . --fix",
     "test": "tsx --test src/**/*.test.ts",
     "test:integration": "tsx --test test/*.integration.ts",
+    "test:docker": "node --test docker/*.test.mjs",
     "test:reports": "tsx --test ../casha-ba-frontend/lib/pdfExport.test.ts",
     "smoke:api": "tsx src/scripts/smoke-api.ts",
     "check:production": "tsx src/scripts/check-production.ts",

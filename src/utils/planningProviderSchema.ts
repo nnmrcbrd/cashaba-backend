@@ -21,7 +21,7 @@ export function planningProviderSchema() {
       required: ['field', 'valueJson'], additionalProperties: false } } },
     required: ['operation', 'language', 'parameters'], additionalProperties: false };
 }
-export const PLANNING_PARAMETER_FORMAT = `Return operation, language and parameters array. Each item is {field,valueJson}; valueJson contains JSON text of the actual typed value (number, boolean, string, array or schedule object). For an amount, valueJson is "80000"; a frequency value is a JSON-encoded quoted string such as monthly. Use exactly these field names: ${parameterNames.join(', ')}. Omit unknown values. Do not repeat a field or put operation/language inside the list.`;
+export const PLANNING_PARAMETER_FORMAT = `Return operation, language and parameters array. Each item is {field,valueJson}; valueJson contains JSON text of the actual typed value (number, boolean, string, array or schedule object). For an amount, valueJson is "80000"; a monthly frequency item is exactly ${JSON.stringify({ field: 'frequency', valueJson: JSON.stringify('monthly') })}. Use exactly these field names: ${parameterNames.join(', ')}. Omit unknown values. Do not repeat a field or put operation/language inside the list.`;
 export function unwrapPlanningParameters(candidate: unknown): unknown {
   // Flat results are retained for existing local/mocked integrations; the live
   // provider is constrained to the envelope above. Both undergo planSchema.
@@ -31,7 +31,17 @@ export function unwrapPlanningParameters(candidate: unknown): unknown {
   const values = parsed.parameters.map(({ field, valueJson }) => {
     if (seen.has(field)) throw new Error('DUPLICATE_PLANNING_FIELD');
     seen.add(field);
-    return [field, JSON.parse(valueJson)] as const;
+    try { return [field, JSON.parse(valueJson)] as const; }
+    catch (error) {
+      // Real provider output sometimes omits the inner quotes for frequency.
+      // Only the exact approved enum is compatible; do not recover malformed
+      // money, arrays, dates, free text or instructions as a typed value.
+      if (field === 'frequency') {
+        const frequency = planSchema.shape.frequency.safeParse(valueJson.trim());
+        if (frequency.success && frequency.data) return [field, frequency.data] as const;
+      }
+      throw error;
+    }
   });
   return { operation: parsed.operation, language: parsed.language, ...Object.fromEntries(values) };
 }

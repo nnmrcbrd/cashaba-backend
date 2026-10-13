@@ -49,7 +49,12 @@ const dataset = { version: 'casha-ai-questions-v1', sourceSha256: createHash('sh
     const scenario = scenarios.find(row => row.id === question.id)!;
     const missing = localFinancialPlan(question.question, missingFacts());
     if (!missing) throw new Error(`Question ${question.id} is not routed as a financial question`);
-    return { ...question, ...scenario, requiredInputs: inputs[scenario.completeInput.operation], tools: ['summary', ...toolMap[scenario.completeInput.operation]],
+    const requiredInputs = scenario.completeInput.costMode === 'total'
+      ? ['full move-in total including stated deposits, furniture and fees']
+      : scenario.completeInput.costMode === 'income_effect'
+        ? ['current and new full costs', 'current and new take-home income, with unchanged income explicitly stated', 'same comparison period; one-time versus recurring costs']
+        : inputs[scenario.completeInput.operation];
+    return { ...question, ...scenario, requiredInputs, tools: ['summary', ...toolMap[scenario.completeInput.operation]],
       missingInput: { ...missing, operation: scenario.completeInput.operation },
       expectedMissingBehavior: scenario.completeInput.operation === 'debt_totals' ? 'report recorded zero with unrecorded-data caveat' : 'ask for absent fields without asserting affordability or a completion date',
     };

@@ -93,6 +93,117 @@ test('provider failure preserves complete figures and missing data questions', a
   assert.match(rendered, /How much is already saved specifically for this target\?$/);
 });
 
+test('the captured live paragraph denying an affordability assumption keeps its valid sources', async () => {
+  const text = 'Calculating how long it takes to reach a financial goal depends on the target price, dedicated saved amount, and the specified contribution rate and frequency, without assuming future contributions are affordable.';
+  const result = executeFinancialPlan(plan, completeFacts());
+  const response = await explainFinancialPlan(message, plan, result, completeFacts(), [],
+    provider(context => ({ explanation: text, sourceIds: [context.guidance[0].id] })));
+  assert.equal(response.explanation, text);
+  assert.equal(response.sources.length, 1);
+});
+
+test('a denied affordability assumption cannot hide a later positive claim or invented amount', async () => {
+  const result = executeFinancialPlan(plan, completeFacts());
+  for (const text of [
+    'Without assuming future contributions are affordable, you can afford this purchase.',
+    'Without assuming future contributions are affordable, your purchase is affordable.',
+    'Without assuming future contributions are affordable, savings are guaranteed.',
+    'Without assuming future contributions are affordable, you have ₱90000 available.',
+  ]) {
+    const response = await explainFinancialPlan(message, plan, result, completeFacts(), [],
+      provider(context => ({ explanation: text, sourceIds: [context.guidance[0].id] })));
+    assert.equal(response.explanation, '', text);
+    assert.deepEqual(response.sources, []);
+  }
+});
+
+test('generated guidance cannot demand a product variant or ask again for a supplied purchase price', async () => {
+  const facts = completeFacts();
+  const purchasePlan: FinancialPlan = { operation: 'goal_change', language: 'en', goalChangeKind: 'purchase', purchase: 10000 };
+  const result = executeFinancialPlan(purchasePlan, facts);
+  for (const text of ['Provide the exact product variant before calculating the effect on savings.',
+    'The specific product model is required before proceeding.', 'Please specify the target price for this purchase.']) {
+    const response = await explainFinancialPlan('How will buying a tablet affect my savings goals?', purchasePlan, result, facts, [],
+      provider(data => ({ explanation: text, sourceIds: [data.guidance[0].id] })));
+    assert.equal(response.status, 'rejected', text);
+    assert.equal(response.explanation, '');
+    assert.match(renderPlanningResponse(result, response.explanation), /Purchase cost: ₱10,000\.00/);
+    assert.match(renderPlanningResponse(result, response.explanation), /Will you pay from available cash/);
+    assert.doesNotMatch(renderPlanningResponse(result, response.explanation), /product variant|target price/);
+  }
+});
+
+test('the captured live uncertainty explanation retains its validated citation', async () => {
+  const question = 'Which expenses could I reduce to free up ₱2,000 monthly?';
+  const cut: FinancialPlan = { operation: 'spending_cut', language: 'en', category: 'Food & Dining', percentCut: 100 };
+  const facts = completeFacts(), result = executeFinancialPlan(cut, facts);
+  for (const text of [
+    'Estimating potential savings relies on specified percentage cuts and recorded past spending rather than guaranteed future expenses.',
+    'Future contributions are not guaranteed and the savings timeline is conditional.',
+    'There is no guarantee that future income matches recorded income.',
+  ]) {
+    const response = await explainFinancialPlan(question, cut, result, facts, [], provider(context => ({ explanation: text, sourceIds: [context.guidance[0].id] })));
+    assert.equal(response.status, 'generated', text);
+    assert.equal(response.explanation, text);
+    assert.equal(response.sources.length, 1);
+    assert.equal(result.values.saving, 2000);
+  }
+});
+
+test('uncertainty wording cannot conceal positive guarantees or other unsafe claims', async () => {
+  const facts = completeFacts(), result = executeFinancialPlan(plan, facts);
+  for (const text of [
+    'Future income is guaranteed.',
+    'Future contributions are not guaranteed, but savings are guaranteed.',
+    'Rather than guaranteed expenses, you can afford this purchase.',
+    'There is no guarantee, but you have ₱90000 available.',
+    'There is no guarantee, but buy stocks.',
+  ]) {
+    const response = await explainFinancialPlan(message, plan, result, facts, [], provider(context => ({ explanation: text, sourceIds: [context.guidance[0].id] })));
+    assert.equal(response.status, 'rejected', text);
+    assert.deepEqual(response.sources, []);
+  }
+});
+
+test('the captured required-input explanation retains its citation without asserting affordability', async () => {
+  const facts = completeFacts();
+  const missingPlan = { ...plan, saved: undefined };
+  const result = executeFinancialPlan(missingPlan, facts);
+  const before = JSON.stringify(result);
+  for (const text of [
+    'Determining how long a goal will take relies on specific inputs including the target price, dedicated saved amount, and an affordable contribution rate with its frequency.',
+    'A savings timeline requires an affordable contribution amount and its frequency.',
+    'A debt timeline depends on affordable payments and interest terms.',
+  ]) {
+    const response = await explainFinancialPlan(message, missingPlan, result, facts, [], provider(context => ({ explanation: text, sourceIds: [context.guidance[0].id] })));
+    assert.equal(response.status, 'generated', text);
+    assert.equal(response.explanation, text);
+    assert.equal(response.sources.length, 1);
+    assert.equal(JSON.stringify(result), before);
+    assert.match(renderPlanningResponse(result, response.explanation), /How much is already saved specifically for this target\?$/);
+  }
+});
+
+test('prerequisite wording cannot conceal personal affordability claims or unsafe advice', async () => {
+  const facts = completeFacts(), result = executeFinancialPlan(plan, facts);
+  for (const text of [
+    'Your payment is affordable.',
+    'This is an affordable contribution.',
+    'A timeline requires inputs, but your plan is affordable.',
+    'A timeline requires a contribution that is affordable for you.',
+    'A timeline needs affordable contributions; your purchase is affordable.',
+    'A timeline requires affordable contributions because your payments seem affordable.',
+    'Your plan requires an affordable contribution of ₱90000.',
+    'A timeline requires affordable contributions and you can afford this purchase.',
+    'A timeline requires affordable contributions and buy stocks.',
+    'A timeline requires affordable contributions and savings are guaranteed.',
+  ]) {
+    const response = await explainFinancialPlan(message, plan, result, facts, [], provider(context => ({ explanation: text, sourceIds: [context.guidance[0].id] })));
+    assert.equal(response.status, 'rejected', text);
+    assert.deepEqual(response.sources, []);
+  }
+});
+
 test('short follow-ups avoid repeating the full financial summary and keep zero-funds qualification', () => {
   const facts = completeFacts();
   facts.breakdown.safeToSpend = 0;

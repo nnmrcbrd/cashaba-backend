@@ -1189,15 +1189,16 @@
     {
       "id": 30,
       "question": "What daily spending limit would let me save ₱2,000 this month?",
-      "intent": "Protect an extra two thousand for saving before daily allowance",
+      "intent": "Protect two thousand for saving through the actual month boundary",
       "completeInput": {
         "language": "en",
         "operation": "daily_limit",
-        "newSaving": 2000
+        "newSaving": 2000,
+        "until": "2026-11-01"
       },
       "expected": {
-        "available": 34800,
-        "dailyLimit": 4971.42
+        "available": 33100,
+        "dailyLimit": 1379.16
       },
       "edgeCases": [
         "Missing records are not zero",
@@ -3927,6 +3928,7 @@
       "completeInput": {
         "language": "en",
         "operation": "debt_payoff",
+        "target": 12000,
         "payment": 1500,
         "frequency": "monthly",
         "interestType": "interest_free",
@@ -5118,15 +5120,15 @@
     {
       "id": 128,
       "question": "How much should I save before moving into a rental, including deposits and basic furniture?",
-      "intent": "Rental full one-time move cost compared with alternative",
+      "intent": "Full supplied rental move-in savings target, not a comparison with an invented alternative",
       "completeInput": {
         "language": "en",
         "operation": "cost_plan",
-        "target": 30000,
-        "alternativeCost": 20000
+        "costMode": "total",
+        "target": 30000
       },
       "expected": {
-        "difference": 10000
+        "fullCost": 30000
       },
       "edgeCases": [
         "Missing records are not zero",
@@ -5136,9 +5138,7 @@
         "Hypothetical inputs labeled"
       ],
       "requiredInputs": [
-        "complete first scenario costs",
-        "comparable alternative costs",
-        "same period"
+        "full move-in total including stated deposits, furniture and fees"
       ],
       "tools": [
         "summary",
@@ -5146,7 +5146,8 @@
       ],
       "missingInput": {
         "operation": "cost_plan",
-        "language": "en"
+        "language": "en",
+        "costMode": "total"
       },
       "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
     },
@@ -5305,15 +5306,21 @@
     {
       "id": 133,
       "question": "How will starting a small business affect my personal budget?",
-      "intent": "Business startup cost versus same-period alternative",
+      "intent": "Business budget effect including full costs and explicitly supplied income, without inferred business revenue",
       "completeInput": {
         "language": "en",
         "operation": "cost_plan",
         "target": 30000,
-        "alternativeCost": 10000
+        "alternativeCost": 10000,
+        "costMode": "income_effect",
+        "income": 30000,
+        "newIncome": 30000
       },
       "expected": {
-        "difference": 20000
+        "difference": 20000,
+        "baselineRemaining": 20000,
+        "remaining": 0,
+        "netEffect": -20000
       },
       "edgeCases": [
         "Missing records are not zero",
@@ -5323,9 +5330,9 @@
         "Hypothetical inputs labeled"
       ],
       "requiredInputs": [
-        "complete first scenario costs",
-        "comparable alternative costs",
-        "same period"
+        "current and new full costs",
+        "current and new take-home income, with unchanged income explicitly stated",
+        "same comparison period; one-time versus recurring costs"
       ],
       "tools": [
         "summary",
@@ -5333,22 +5340,29 @@
       ],
       "missingInput": {
         "operation": "cost_plan",
-        "language": "en"
+        "language": "en",
+        "costMode": "income_effect"
       },
       "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
     },
     {
       "id": 134,
       "question": "Can I afford to take a lower-paying job with cheaper transportation costs?",
-      "intent": "Net job-cost difference for comparable supplied amounts",
+      "intent": "Job budget effect accounting for both reduced take-home income and lower full costs",
       "completeInput": {
         "language": "en",
         "operation": "cost_plan",
         "target": 25000,
-        "alternativeCost": 28000
+        "alternativeCost": 28000,
+        "costMode": "income_effect",
+        "income": 30000,
+        "newIncome": 28000
       },
       "expected": {
-        "difference": -3000
+        "difference": -3000,
+        "baselineRemaining": 2000,
+        "remaining": 3000,
+        "netEffect": 1000
       },
       "edgeCases": [
         "Missing records are not zero",
@@ -5358,9 +5372,9 @@
         "Hypothetical inputs labeled"
       ],
       "requiredInputs": [
-        "complete first scenario costs",
-        "comparable alternative costs",
-        "same period"
+        "current and new full costs",
+        "current and new take-home income, with unchanged income explicitly stated",
+        "same comparison period; one-time versus recurring costs"
       ],
       "tools": [
         "summary",
@@ -5369,7 +5383,8 @@
       "missingInput": {
         "operation": "cost_plan",
         "language": "en",
-        "lent": false
+        "lent": false,
+        "costMode": "income_effect"
       },
       "expectedMissingBehavior": "ask for absent fields without asserting affordability or a completion date"
     },

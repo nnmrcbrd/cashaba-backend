@@ -1,4 +1,6 @@
 import type { FinancialPlan } from './financialPlanner';
+import { normalizeChatQuestion } from './chatQuestion';
+import { isPurchaseGoalImpact } from './planningInputs';
 
 type Operation = FinancialPlan['operation'];
 // These describe tools, not user answers. The same descriptions guide provider
@@ -10,7 +12,7 @@ export const PLANNING_OPERATIONS: Record<Operation, string> = {
   runway: 'How long accessible savings cover essentials without income.',
   goal_timeline: 'How many contributions or how long to reach a goal at a stated/current saving rate, including a cheaper target.',
   goal_contribution: 'Required saving/extra income per contribution to reach a target within a deadline or stated number of periods; realism/on-track checks.',
-  goal_change: 'Effect on a goal of changed contributions, a bonus, skipped contributions or withdrawal. Extra income adds to the existing saving rate.',
+  goal_change: 'Effect on recorded goals of a purchase, changed contributions, a bonus, skipped contributions or withdrawal. A purchase cost uses purchase, not delta or the target of an existing goal. Ask whether the purchase is funded by cash, goal_savings or planned_contributions; never invent funding or choose a goal. Extra income adds to the existing saving rate. Use delta for an increase by a stated amount; contribution is a separately stated base saving amount, never that increment.',
   goal_split: 'Allocate one contribution budget across multiple selected savings goals in priority order.',
   budget_review: 'Actual spending versus the current budget target; whether spending is on track, faster than planned or realistic.',
   budget_allocate: 'Plan income among essentials, commitments and savings; assess ongoing subscription/installment costs against monthly income.',
@@ -30,7 +32,7 @@ export const PLANNING_OPERATIONS: Record<Operation, string> = {
   bill_cost: 'Recurring subscription/bill costs, cancellation savings and yearly equivalents.',
   emergency_cover: 'Essential-expense coverage target for an emergency fund or time away from work.',
   school_budget: 'Allowance or student income after actual attendance days, food, transport and other school costs.',
-  cost_plan: 'Compare explicitly stated costs of alternatives such as housing, commute, business or cash versus installments.',
+  cost_plan: 'Use the full supplied move-in total for rental savings questions, without requiring an alternative. Compare costs of actual alternatives over the same period. For a job or business budget change, include both current and new take-home income and full costs; cheaper transport alone does not establish affordability. Keep one-time and recurring costs separate.',
   missing_info: 'Identify missing inputs for a goal plan without assuming amounts, dates or frequencies.',
 };
 
@@ -39,7 +41,7 @@ const rules: Array<[Operation, RegExp]> = [
   ['debt_totals', /still owe|borrowed money.*owe|lent.*(?:not|hasn.t).*repaid|money.*lent.*repaid/],
   ['debt_budget', /remain.*income.*debt|income after.*debt/],
   ['debt_compare', /(?:extra|earlier).*(?:finish|pay|loan|debt)|(?:pay|loan|debt).*extra/],
-  ['cost_plan', /cash or.*installment|deposits|basic furniture|closer to work|small business|lower.paying/],
+  ['cost_plan', /cash or.*installment|deposits|basic furniture|closer to work|small business|lower.paying|how much.*(?:save|set aside).*mov(?:e|ing)|move.in.*cost/],
   ['debt_payoff', /pay off|payoff|clear my loan|finish my loan|total cost.*installment|interest rate|which debt|another loan/],
   ['daily_limit', /(?:balance|money|cash).*last.*(?:payday|next income)|payday.*delay|allowance.*(?:late|arrives late)|daily.*(?:limit|spending)|limit.*daily|miss.*weeks.*work/],
   ['runway', /how long.*(?:savings last|money last)|lose my income/],
@@ -50,10 +52,11 @@ const rules: Array<[Operation, RegExp]> = [
   ['goal_split', /split.*sav|divide (?:my |the )?savings|both.*(?:laptop|phone|vacation)|vacation and.*phone|which.*goals.*finish/],
   ['goal_change', /skip saving|withdraw|increase.*saving|save.*more|bonus.*(?:closer|debt|goal)|extra.*income.*goal|(?:earn|receive).*extra.*goal|affect.*(?:other )?savings goals|emergency.*goals.*delay/],
   ['spending_cut', /cut.*half|stop buying|bringing lunch|packed meals|reduce.*free up/],
-  ['period_forecast', /(?:balance|save|saving).*(?:end of the month|end of the year)/],
+  ['period_forecast', /(?:balance|save|saving).*(?:end of (?:the|this) month|end of the year)/],
   ['cash_available', /how much.*save.*(?:after.*bills|without|safely|can afford)|maximum.*sav(?:e|ing)/],
+  ['goal_timeline', /\bcheaper\b.*(?:earlier|reach).*\b(?:goal|saving)/],
   ['goal_contribution', /how much.*(?:save|set aside).*(?:monthly|weekly|payday|month|year|enrollment|wedding)|how much.*need.*save|extra income.*(?:afford|purchase|within)|reach.*(?:six months|two years|one year)|buy.*within.*year|on track|finish.*earlier|savings target.*realistic|emergency money.*(?:build|months)|saving for bills.*due/],
-  ['goal_timeline', /how long|when.*(?:reach|finish)|current pace.*goal|goal.*current pace|tigom|kailan|save.*every day|save for.*(?:laptop|phone)|saving.*\d|cheaper.*(?:reach|goal)|save.*laptop.*allowance/],
+  ['goal_timeline', /how long|how many(?: (?:daily|weekly|monthly|payday))? (?:savings? )?(?:contributions?|deposits?)\b|when.*(?:reach|finish)|current pace.*goal|goal.*current pace|tigom|kailan|save.*every day|save for.*(?:laptop|phone)|saving.*\d|cheaper.*(?:reach|goal)|save.*laptop.*allowance/],
   ['history_peak', /highest spending/],
   ['spending_compare', /spen[dt].*(?:more|less).*last month|category increased|category.*increase.*most/],
   ['category_spending', /where.*money go|spent.*since|spent.*year|which purchases|food delivery|commuting.*cost|practical change|money.*run.*out|budget categor|past spending|subscriptions.*increased|small daily purchases|expenses.*(?:temporarily reduce|reduce.*emergency)/],
@@ -66,10 +69,12 @@ const rules: Array<[Operation, RegExp]> = [
 ];
 
 export function planningQuestion(message: string) {
+  message = normalizeChatQuestion(message);
   // Structured scenario inputs are values, not intent instructions.
   return message.split(/\n(?:Explicit hypothetical scenario details[^\n]*:|(?:Scenario|Planning inputs|Details)\s*:)|\n```(?:json)?\s*\n/i)[0].trim();
 }
 export function clearPlanningIntent(message: string): Operation | null {
   const question = planningQuestion(message).normalize('NFKC').toLowerCase();
+  if (isPurchaseGoalImpact(question)) return 'goal_change';
   return rules.find(([, pattern]) => pattern.test(question))?.[0] ?? null;
 }

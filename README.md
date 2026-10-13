@@ -43,3 +43,8 @@ See the repository-level README for the calculation contract and complete demons
 ## October 2 safeguards
 
 Run `npx prisma migrate deploy` against an existing database before deploying the shared production limiter. Use the baseline instructions in prisma/README.md for an empty database. Set TEST_DATABASE_URL to an explicit disposable database for integration tests; application-database fallback is disabled. Reporting follows Asia/Manila, while date-only inputs retain the existing UTC storage contract. Live billing requires genuine sandbox webhook and checkout verification.
+## Docker and VPS deployment
+
+See [the backend Docker/VPS guide](docs/DOCKER_DEPLOYMENT.md) for the production
+Dockerfile, Compose, Nginx, database initialization and separate GitHub Actions
+workflow. This backend deployment does not build or deploy the frontend.

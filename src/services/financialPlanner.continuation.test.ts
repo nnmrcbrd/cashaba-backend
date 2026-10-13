@@ -19,6 +19,20 @@ const screenshotFacts = () => {
   return facts;
 };
 
+test('retry and frustration preserve a complete owner-bound plan without reclassifying it', async () => {
+  const plan = { operation: 'goal_timeline', language: 'en', target: 194000, saved: 0, contribution: 10000, frequency: 'monthly' } as const;
+  for (const message of ['im asking', 'stupid', 'answer my question']) {
+    let calls = 0;
+    const answer = await answerFinancialPlan(message, screenshotFacts(), 'owner-a', [
+      { question: 'My phone costs ₱194000, saved ₱0, saving ₱10000 monthly. How long?', answer: '20 monthly contributions.', pendingAction: context(plan) },
+    ], { reserve: async () => {}, generate: async () => { calls++; return { text: '{"operation":"budget_review","language":"en"}' } as GenerateContentResponse; } });
+    assert.equal(answer?.result.operation, 'goal_timeline', message);
+    assert.equal(answer?.result.values.periods, 20, message);
+    assert.equal(calls, 0, 'Retry is a request to explain the existing plan, not extract new inputs');
+    assert.doesNotMatch(answer!.content, /Month-to-date spending|What would you like/);
+  }
+});
+
 test('the exact product and capacity reply fills the pending target locally', () => {
   const first = localFinancialPlan(originalQuestion, screenshotFacts())!;
   const next = localFinancialPlan(priceReply, screenshotFacts(), context(first))!;

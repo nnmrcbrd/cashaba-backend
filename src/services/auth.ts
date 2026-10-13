@@ -20,21 +20,23 @@ type SessionUser = { id: string; accountRole: string; roles: string[]; sessionVe
 function createAccessToken(user: SessionUser, authMethod: AuthMethod) {
   return jwt.sign({ userId: user.id, accountRole: user.accountRole, roles: user.roles, authMethod, sessionVersion: user.sessionVersion }, requiredSecret('JWT_ACCESS_SECRET'), { expiresIn: ACCESS_TOKEN_TTL });
 }
-export function signRefreshToken(userId: string, authMethod: AuthMethod, sessionVersion: number) {
-  return jwt.sign({ userId, authMethod, sessionVersion }, requiredSecret('JWT_REFRESH_SECRET'), { expiresIn: '7d', jwtid: randomUUID() });
+export function signRefreshToken(userId: string, authMethod: AuthMethod, sessionVersion: number, freshSignIn = false) {
+  return jwt.sign({ userId, authMethod, sessionVersion,
+    ...(authMethod === 'GOOGLE' && freshSignIn ? { freshSignIn: true } : {}),
+  }, requiredSecret('JWT_REFRESH_SECRET'), { expiresIn: '7d', jwtid: randomUUID() });
 }
-async function createRefreshToken(tx: FinancialTx, user: SessionUser, authMethod: AuthMethod) {
-  const refreshToken = signRefreshToken(user.id, authMethod, user.sessionVersion);
+async function createRefreshToken(tx: FinancialTx, user: SessionUser, authMethod: AuthMethod, freshSignIn = false) {
+  const refreshToken = signRefreshToken(user.id, authMethod, user.sessionVersion, freshSignIn);
   await tx.token.create({ data: { token: tokenFingerprint(refreshToken), type: 'REFRESH', expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS), userId: user.id } });
   return refreshToken;
 }
-async function session(tx: FinancialTx, userId: string, authMethod: AuthMethod) {
+async function session(tx: FinancialTx, userId: string, authMethod: AuthMethod, freshSignIn = false) {
   const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
   if (user.accountStatus === 'SUSPENDED') throw new Error('This account has been suspended. Contact an administrator.');
   await tx.user.update({ where: { id: user.id }, data: { lastActiveAt: new Date() } });
   return {
     user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, accountRole: user.accountRole, accountStatus: user.accountStatus, gender: user.gender, avatarUrl: user.avatarUrl, roles: user.roles, createdAt: user.createdAt, onboardingComplete: Boolean(user.onboardingCompletedAt), onboardingStep: user.onboardingStep, customRole: user.customRole, region: user.region, authMethod },
-    accessToken: createAccessToken(user, authMethod), refreshToken: await createRefreshToken(tx, user, authMethod),
+    accessToken: createAccessToken(user, authMethod), refreshToken: await createRefreshToken(tx, user, authMethod, freshSignIn),
   };
 }
 interface RegistrationData { firstName: string; lastName: string; email: string; password: string; gender?: string; role?: Array<'STUDENT' | 'WORKING' | 'FREELANCE' | 'MARRIED'> }
@@ -102,7 +104,9 @@ export async function loginWithGoogle(profile: GoogleUserProfile) {
     const discardUnverifiedPassword = firstLink && !current.localCredentialVerified;
     if (firstLink) await tx.token.updateMany({ where: { userId: current.id, revokedAt: null }, data: { revokedAt: new Date() } });
     await tx.user.update({ where: { id: current.id }, data: { googleSubject: profile.subject, ...name, avatarUrl: profile.picture || current.avatarUrl, emailVerified: new Date(), ...(firstLink ? { sessionVersion: { increment: 1 } } : {}), ...(discardUnverifiedPassword ? { password: await bcrypt.hash(randomBytes(32).toString('hex'), 12) } : {}) } });
-    return session(tx, current.id, 'GOOGLE');
+    // Only a completed verified Google login starts a fresh idle window. The
+    // signed one-use refresh token carries this marker across the redirect.
+    return session(tx, current.id, 'GOOGLE', true);
   });
 }
 export async function refreshUserSession(refreshToken: string) {
@@ -117,7 +121,12 @@ export async function refreshUserSession(refreshToken: string) {
     const claimed = await tx.token.updateMany({ where: { token: tokenFingerprint(refreshToken), userId, type: 'REFRESH', consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, data: { consumedAt: new Date() } });
     if (!claimed.count) throw new Error('Refresh token is no longer active');
     const result = await session(tx, userId, decoded.authMethod === 'GOOGLE' ? 'GOOGLE' : 'LOCAL');
-    return { accessToken: result.accessToken, refreshToken: result.refreshToken };
+    // Rotation does not copy the marker, so later refreshes/reloads retain the
+    // existing activity clock and cannot revive an expired idle session.
+    const signInAge = typeof decoded.iat === 'number' ? Date.now() - decoded.iat * 1000 : Infinity;
+    return { accessToken: result.accessToken, refreshToken: result.refreshToken,
+      freshSignIn: decoded.authMethod === 'GOOGLE' && decoded.freshSignIn === true
+        && signInAge >= 0 && signInAge < 15 * 60 * 1000 };
   });
 }
 export async function revokeUserSession(refreshToken?: string) {

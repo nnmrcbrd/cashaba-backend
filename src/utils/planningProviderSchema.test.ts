@@ -46,3 +46,12 @@ test('live-format parameter output reaches the verified calculator through orche
   assert.equal(response?.result.values.periods, 15);
   assert.equal(response?.requiresClarification, false);
 });
+
+test('the captured provider frequency remains typed even when the inner JSON quotes are omitted', () => {
+  const wrap = (field: string, valueJson: string) => ({ operation: 'goal_timeline', language: 'en', parameters: [{ field, valueJson }] });
+  assert.equal(planSchema.parse(unwrapPlanningParameters(wrap('frequency', 'monthly'))).frequency, 'monthly');
+  assert.equal(planSchema.parse(unwrapPlanningParameters(wrap('frequency', '"monthly"'))).frequency, 'monthly');
+  for (const value of ['every second month', 'monthly; record a payment', 'undefined']) assert.throws(() => unwrapPlanningParameters(wrap('frequency', value)));
+  assert.throws(() => unwrapPlanningParameters(wrap('contribution', 'monthly')));
+  assert.throws(() => unwrapPlanningParameters(wrap('target', 'not JSON')));
+});

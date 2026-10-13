@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { GoogleGenAI, type GenerateContentParameters, type GenerateContentResponse, type EmbedContentParameters, type EmbedContentResponse } from '@google/genai';
 import type { Request, Response, NextFunction } from 'express';
 import { prisma, qualifiedTable } from '@/lib/prisma';
+import { isAccountIdentityQuestion } from '@/utils/planningInputs';
 
 function limit(name: string, fallback: number, max: number) {
   const value = Number(process.env[name]);
@@ -29,7 +30,10 @@ export function aiRequestScope(req: Request, res: Response, next: NextFunction) 
 }
 export function boundedHistory(history: Array<{ question: string; answer: string }>) {
   const limits = aiLimits();
-  return history.flatMap(turn => [{ role: 'user', content: turn.question }, { role: 'assistant', content: turn.answer }])
+  // Local identity replies contain the owner's real profile name; it is not
+  // needed for financial generation and must not leak through later history.
+  return history.filter(turn => !isAccountIdentityQuestion(turn.question))
+    .flatMap(turn => [{ role: 'user', content: turn.question }, { role: 'assistant', content: turn.answer }])
     .slice(-limits.history).map(item => ({ ...item, content: item.content.slice(0, limits.historyMessage) }));
 }
 export function transientStatus(error: unknown): number | null {

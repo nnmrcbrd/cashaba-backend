@@ -1,10 +1,13 @@
 import { z } from 'zod';
 import { conversationFollowUp, personalFinanceReply, personalQuestionTopic, type AdviceFacts, type PersonalTopic } from './personalFinanceAdvice';
 import { safeQualitativeReply } from './aiSafety';
+import { isSafeToSpendExplanation } from './planningInputs';
+import { normalizeChatQuestion } from './chatQuestion';
 
 const topics = ['help', 'transactions', 'transfers', 'analytics', 'registration', 'income', 'spending', 'budget', 'savings', 'debts', 'bills', 'accounts', 'safe-to-spend'] as const;
 export type CoreTopic = typeof topics[number];
-const contextSchema = z.object({ kind: z.literal('CORE_CONVERSATION'), topic: z.enum(topics), updatedAt: z.string().datetime() });
+const contextSchema = z.object({ kind: z.literal('CORE_CONVERSATION'), topic: z.enum(topics), updatedAt: z.string().datetime(),
+  originalQuestion: z.string().trim().min(1).max(4000).optional() });
 export type CoreContext = z.infer<typeof contextSchema>;
 export function isClearlyOffTopic(message: string) {
   return !/casha.?ba|financ|budget|saving|expense|income|debt|loan|bill|money|wallet|account|spend|goal|afford|price|purchase/i.test(message)
@@ -36,6 +39,10 @@ export const CORE_KNOWLEDGE: Record<CoreTopic, string> = {
 };
 
 export function coreTopic(message: string, previous?: CoreContext | null): CoreTopic {
+  message = normalizeChatQuestion(message);
+  if (isSafeToSpendExplanation(message)) return 'safe-to-spend';
+  if (previous?.topic === 'safe-to-spend' && conversationFollowUp(message) === 'why'
+    && /\b(?:0|zero)\b/i.test(message) && /\b(?:siya|it|this|that)\b/i.test(message)) return previous.topic;
   if (/\b(?:csv|receipt|transaction history|transaction|undo|categor(?:y|ies)|export|print|pdf)\b/i.test(message)) return 'transactions';
   if (/\b(?:transfers?|move money)\b/i.test(message)) return 'transfers';
   if (/\b(?:analytics|financial review|charts?|graphs?|period comparison)\b/i.test(message)) return 'analytics';
@@ -50,19 +57,41 @@ export function coreTopic(message: string, previous?: CoreContext | null): CoreT
 }
 
 export function isCoreQuestion(message: string) {
-  return !!conversationFollowUp(message) || /^(?:how|why|what|which|when|can|could|would|is|are|do|does|will|show|tell|explain|define|help|teach|guide|ano|paano|bakit|magkano|hi|hello|hey|thanks|thank you)\b/i.test(message)
+  message = normalizeChatQuestion(message);
+  return !!conversationFollowUp(message) || /^(?:how|why|what|who|which|when|can|could|would|is|are|do|does|will|show|tell|explain|define|help|teach|guide|ano|paano|bakit|magkano|ngano(?:ng)?|unsa(?:y|on)?|pila|asa|kanus.a|kinsa|hi|hello|hey|thanks|thank you)\b/i.test(message)
     || /\b(?:question|advice|suggestion|confused|understand|not working|doesn.t work)\b/i.test(message);
 }
 
-export function coreReply(message: string, facts: AdviceFacts, previous?: CoreContext | null) {
-  const topic = isClearlyOffTopic(message) ? 'help' : coreTopic(message, previous);
-  const context: CoreContext = { kind: 'CORE_CONVERSATION', topic, updatedAt: new Date().toISOString() };
+export function coreReply(message: string, facts: AdviceFacts, previous?: CoreContext | null): { content: string; context: CoreContext } {
+  message = normalizeChatQuestion(message);
   const followUp = conversationFollowUp(message);
+  // Recompute from the original user question and fresh facts. Never replay
+  // old assistant prose (which can itself be the wrong answer).
+  if (followUp === 'retry' && previous?.originalQuestion) {
+    return coreReply(previous.originalQuestion, facts);
+  }
+  const topic = isClearlyOffTopic(message) ? 'help' : coreTopic(message, previous);
+  const reset = isClearlyOffTopic(message) || /^(?:thanks|thank you|salamat|hi|hello|hey|new topic|start over|forget (?:that|this)|never mind|cancel)\b/i.test(message);
+  const explicitSubject = /casha.?ba|safe.to.spend|\b(?:wallet|account|balance|budget|saving|goal|income|spending|expense|debt|loan|bill|transaction|transfer|chart|graph|registration|verification|password)\w*\b/i.test(message);
+  const inheritQuestion = followUp && !explicitSubject && topic === previous?.topic;
+  const originalQuestion = reset ? undefined : inheritQuestion ? previous?.originalQuestion : isCoreQuestion(message) && followUp !== 'retry' ? message.slice(0, 4000) : undefined;
+  const context: CoreContext = { kind: 'CORE_CONVERSATION', topic, updatedAt: new Date().toISOString(), ...(originalQuestion ? { originalQuestion } : {}) };
   const howTo = /\b(?:how (?:do(?:es)?|can|to)|where|steps?|guide|start|use|create|set up|add|record|work|meaning|difference|definition)\b/i.test(message) || followUp === 'next';
   let content: string;
   if (isClearlyOffTopic(message)) content = 'I focus on Casha-Ba and your recorded finances. I can help with budgeting, savings, Safe-to-Spend, accounts, transactions, bills and debts.';
   else if (/^(?:thanks|thank you|salamat)\b/i.test(message)) content = 'You’re welcome. You can keep asking about the same plan or another part of Casha-Ba.';
   else if (/^(?:hi|hello|hey)[!.,\s]*$/i.test(message)) content = 'Hi! What would you like help with—understanding your finances, using Casha-Ba, or planning a savings goal?';
+  else if (topic === 'help' && (howTo && /casha.?ba|\b(?:system|app)\b/i.test(message)
+    || followUp && previous?.originalQuestion && /how.*(?:use|start).*casha.?ba|how.*(?:use|start).*(?:system|app)/i.test(previous.originalQuestion))) {
+    content = 'To use Casha-Ba:\n\n'
+      + '• Money → Wallet & Accounts: add your cash, bank or e-wallet accounts and their current balances.\n'
+      + '• Money → Transaction History: record income when received and expenses when paid, using the correct account and date. Expected onboarding income is a plan, not received money.\n'
+      + '• Planning → Budget & Goals: set your spending limit and savings goals; record contributions when you actually set money aside.\n'
+      + '• Planning → Obligations & Debts: add bills and borrowed or lent money, then record payments or collections.\n'
+      + '• Dashboard: review your balances, debts and Safe-to-Spend breakdown. Intelligence → Financial Review shows recorded income and spending.\n\n'
+      + 'You can ask the AI Assistant about these records or a savings plan. Review any financial-action preview before confirming it.';
+  }
+  else if (followUp === 'retry' && topic === 'help') content = 'I could not identify the question you want me to answer from this recent conversation. Please send that question again.';
   else if (topic === 'help') content = 'I can help with Casha-Ba’s budgets, savings plans, Safe-to-Spend, accounts, transactions, bills and debts. What would you like to understand or do?';
   else if (followUp === 'simple') {
     const simple: Record<Exclude<CoreTopic, 'help'>, string> = {
@@ -89,6 +118,32 @@ export function coreReply(message: string, facts: AdviceFacts, previous?: CoreCo
     if (topic === 'savings') content += facts.breakdown.safeToSpend === 0 ? '\n\nYour current Safe-to-Spend is ₱0.00. Review received income and commitments before planning an extra contribution.' : `\n\nYour current Safe-to-Spend is ${php(facts.breakdown.safeToSpend)}; check upcoming commitments before choosing a saving amount.`;
   } else content = personalFinanceReply(topic as PersonalTopic, message, facts);
   return { content, context };
+}
+
+export function recoverCoreContext(history: Array<{ question: string; pendingAction?: unknown }>, facts: AdviceFacts): CoreContext | null {
+  let previous: CoreContext | null = null;
+  // The caller provides a bounded history belonging to the authenticated user.
+  // Old rows kept only the topic: reconstruct the question from user turns
+  // within the same valid context, stopping at a reset or another workflow.
+  for (const turn of history) {
+    const stored = readCoreContext(turn.pendingAction);
+    if (!stored) { previous = null; continue; }
+    const reconstructed: CoreContext = coreReply(turn.question, facts, previous).context;
+    previous = { ...stored, originalQuestion: stored.originalQuestion ?? reconstructed.originalQuestion };
+  }
+  return previous;
+}
+
+export function isUsefulCoreReply(content: string, verifiedAnswer: string): boolean {
+  if (verifiedAnswer.startsWith('To use Casha-Ba:')) {
+    // A valid source ID does not make an apology or capabilities invitation an
+    // answer to a usage question. Require concrete existing navigation.
+    const routes = [/Wallet\s*(?:&|and)\s*Accounts/i, /Transaction History/i, /Budget\s*(?:&|and)\s*Goals/i, /Obligations\s*(?:&|and)\s*Debts/i, /Financial Review/i, /Dashboard/i];
+    return routes.filter(route => route.test(content)).length >= 2;
+  }
+  if (!/What would you like to understand or do\?|What would you like help with/i.test(verifiedAnswer)
+    && /I can help with Casha.Ba|What would you like to understand or do\?|I am here to help you manage your budgets/i.test(content)) return false;
+  return true;
 }
 const php = (amount: number) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(amount);
 

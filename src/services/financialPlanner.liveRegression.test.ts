@@ -11,15 +11,17 @@ test('all original questions retain their intended tool with complete explicit s
   const failures: unknown[] = [];
   for (const row of bank.questions) {
     const inputs = Object.fromEntries(Object.entries(row.completeInput).filter(([key]) => !['operation', 'language'].includes(key)));
-    const message = `${row.question}\nScenario: ${JSON.stringify(inputs)}`;
-    const facts = completeFacts(), before = JSON.stringify(facts);
-    const plan = localFinancialPlan(message, facts);
-    const result = plan ? executeFinancialPlan(plan, facts) : null;
-    const wrong = Object.entries(row.expected).filter(([key, value]) => result?.values[key] !== value);
-    if (plan?.operation !== row.completeInput.operation || result?.missing.length || wrong.length) {
-      failures.push({ id: row.id, expected: row.completeInput.operation, actual: plan?.operation, missing: result?.missing, wrong });
+    for (const label of ['Scenario', 'Explicit hypothetical scenario details (not changes to my records)']) {
+      const message = `${row.question}\n${label}: ${JSON.stringify(inputs)}`;
+      const facts = completeFacts(), before = JSON.stringify(facts);
+      const plan = localFinancialPlan(message, facts);
+      const result = plan ? executeFinancialPlan(plan, facts) : null;
+      const wrong = Object.entries(row.expected).filter(([key, value]) => result?.values[key] !== value);
+      if (plan?.operation !== row.completeInput.operation || result?.missing.length || wrong.length) {
+        failures.push({ id: row.id, label, expected: row.completeInput.operation, actual: plan?.operation, missing: result?.missing, wrong });
+      }
+      assert.equal(JSON.stringify(facts), before);
     }
-    assert.equal(JSON.stringify(facts), before);
   }
   assert.deepEqual(failures, []);
 });
@@ -74,6 +76,22 @@ test('scenario inputs reject invalid dates, amounts and privileged/action fields
   for (const data of [{ target: -100 }, { target: 0.001 }, { schedule: { frequency: 'daily', first: '2026-02-30' } }, { owner: 'other', target: 100 }, { operation: 'TRANSFER', purchase: 100 }, { userId: 'other', saved: 0 }, { periods: 0 }]) {
     assert.deepEqual(explicitPlanningInputs(`Planning inputs: ${JSON.stringify(data)}`), {});
   }
+});
+
+test('malformed provider JSON preserves all explicit nested schedule inputs', async () => {
+  const message = 'If I save ₱100 every day, when will I reach ₱20,000?\nExplicit hypothetical scenario details (not changes to my records): {"target":20000,"saved":0,"contribution":100,"frequency":"daily","schedule":{"frequency":"daily","first":"2026-10-09"}}';
+  const answer = await answerFinancialPlan(message, completeFacts(), 'owner-a', [], {
+    reserve: async () => {},
+    // Gemini's observed response supplied daily as raw text instead of the
+    // required JSON-encoded string. This must never discard the user's inputs.
+    generate: async () => ({ text: JSON.stringify({ operation: 'goal_timeline', language: 'en',
+      parameters: [{ field: 'frequency', valueJson: 'daily' }] }) }) as GenerateContentResponse,
+  });
+  assert.equal(answer?.requiresClarification, false);
+  assert.equal(answer?.context.plan.saved, 0);
+  assert.equal(answer?.result.values.periods, 200);
+  assert.equal(answer?.result.values.completionDate, '2027-04-26');
+  assert.doesNotMatch(answer?.content ?? '', /How much is already saved/);
 });
 
 test('cash duration and affordable monthly saving paraphrases keep their cash meaning', async () => {

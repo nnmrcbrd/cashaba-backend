@@ -1,12 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { coreReply, coreTopic, groundReply, renderGroundedReply, readCoreContext } from './coreConversation';
+import { coreReply, coreTopic, groundReply, renderGroundedReply, readCoreContext, isCoreQuestion } from './coreConversation';
 import type { AdviceFacts } from './personalFinanceAdvice';
 
 const facts: AdviceFacts = {
   breakdown: { configuredIncome: 10000, actualIncome: 2500, totalIncome: 2500, totalFixed: 0, totalSavings: 0, totalExpenses: 2648, totalLoanRepayments: 0, rawSafeToSpend: -148, safeToSpend: 0, periodStart: '2026-10-01', periodEnd: '2026-11-01' },
   incomePeriod: 'monthly', goals: [], accounts: [{ name: 'My Cash', balance: 500, kind: 'ASSET' }], bills: [], loans: [], budget: { target: 5000, spent: 2648 },
 };
+
+test('Cebuano Safe-to-Spend questions and follow-ups retain the financial topic', () => {
+  for (const question of ['nganong 0 ang safe to spend?', 'unsa ang safe to spend?', 'unsay Safe-to-Spend?', 'pila akong safe to spend?']) {
+    assert.equal(isCoreQuestion(question), true, question);
+    const turn = coreReply(question, facts);
+    assert.equal(turn.context.topic, 'safe-to-spend', question);
+    assert.match(turn.content, /₱0\.00/);
+    assert.doesNotMatch(turn.content, /I can help with/);
+  }
+  const previous = coreReply('Why is my Safe-to-Spend zero?', facts).context;
+  for (const question of ['nganong 0 siya nga naa naman gi butang sa on boarding?', 'nganong 0 siya nga naa naman gi butang sa onboarding?', 'wala ko kasabot', 'unsaon mana?']) {
+    const turn = coreReply(question, facts, previous);
+    assert.equal(isCoreQuestion(question), true, question);
+    assert.equal(turn.context.topic, 'safe-to-spend', question);
+    assert.match(turn.content, /₱0\.00/);
+    assert.doesNotMatch(turn.content, /I can help with/);
+  }
+  assert.equal(coreTopic('unsa akong wallet balance?', previous), 'accounts');
+  assert.equal(coreTopic('unsay monthly budget?', previous), 'budget');
+  assert.equal(coreTopic('How do I transfer money without changing Safe-to-Spend?', previous), 'transfers');
+  assert.equal(isCoreQuestion('Pay 500 from Cash today'), false);
+});
 test('core feature questions explain existing navigation and preserve the topic for informal follow-ups', () => {
   const cases = [
     ['How do I set up a savings goal?', 'savings', 'Planning → Budget & Goals'],
@@ -48,4 +70,36 @@ test('core context survives a pause while unrelated requests can start a new top
   assert.equal(coreTopic('thanks', budget.context), 'help');
   assert.equal(coreReply('What is the weather?', facts, budget.context).context.topic, 'help');
   assert.match(coreReply('Write a poem', facts).content, /I focus on Casha-Ba/);
+});
+
+test('retry and frustration continue the actual usage question across saved context', () => {
+  let context = coreReply('how to use casha-ba?', facts).context;
+  for (const message of ['im asking', 'stupid', 'answer my question', 'you did not answer my question']) {
+    const reloaded = readCoreContext(JSON.parse(JSON.stringify(context)));
+    const reply = coreReply(message, facts, reloaded);
+    assert.equal(isCoreQuestion(message), true, message);
+    assert.match(reply.content, /Money → Wallet & Accounts/, message);
+    assert.match(reply.content, /Money → Transaction History/, message);
+    assert.doesNotMatch(reply.content, /What would you like to understand|I am here to help|I apologize/, message);
+    assert.equal((reply.context as { originalQuestion?: string }).originalQuestion, 'how to use casha-ba?');
+    context = reply.context;
+  }
+});
+
+test('retry uses fresh records and an explicit new question replaces the previous one', () => {
+  const budget = coreReply('How is my budget?', facts);
+  const changed = { ...facts, budget: { target: 5000, spent: 3500 } };
+  assert.match(coreReply('that is not what I asked', changed, budget.context).content, /₱3,500\.00/);
+  const wallet = coreReply('What are my account balances?', facts, budget.context);
+  const retry = coreReply('im asking', facts, wallet.context);
+  assert.match(retry.content, /My Cash/);
+  assert.doesNotMatch(retry.content, /₱5,000\.00|What would you like/);
+  const usage = coreReply('How do I use Casha-Ba?', facts);
+  const budgetWhy = coreReply('Why is my budget exceeded?', facts, usage.context);
+  assert.equal(budgetWhy.context.originalQuestion, 'Why is my budget exceeded?');
+  const budgetRetry = coreReply('im asking', changed, budgetWhy.context);
+  assert.match(budgetRetry.content, /₱3,500\.00/);
+  assert.doesNotMatch(budgetRetry.content, /To use Casha-Ba/);
+  const reset = coreReply('What is the weather?', facts, wallet.context);
+  assert.doesNotMatch(coreReply('im asking', facts, reset.context).content, /My Cash/);
 });
