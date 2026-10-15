@@ -56,6 +56,17 @@ Create these five separate **repository secrets**:
 | `SSH_USER` | `root`, matching the current server paths |
 | `SSH_PRIVATE_KEY` | Private key whose matching public key is authorized on that VPS |
 
+If the SSH private key is encrypted, also create a repository secret named
+`SSH_PASSPHRASE`. Its value is the passphrase used when creating that private
+key. Both the file-copy and remote-command steps use this secret to unlock
+the key. Unencrypted keys can leave it unset.
+
+The error `ssh: this private key is passphrase protected` means this passphrase
+is missing from the workflow or its secret. Enter the passphrase directly in
+GitHub Secrets; it is not the GitHub account password or VPS login password.
+Keep the complete private key in `SSH_PRIVATE_KEY`, including its BEGIN/END
+lines. This does not require changes to `docker-compose.yaml` or the VPS setup.
+
 Push main or manually run the **Deploy** workflow on main. It validates the
 backend files without loading the VPS-only environment file, runs deployment
 regressions, and publishes the runtime image. It copies only

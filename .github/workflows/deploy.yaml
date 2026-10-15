@@ -75,6 +75,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
           source: 'docker-compose.yaml,scripts/deploy.sh'
           target: '/root/docker/cashaba-backend'
           overwrite: true
@@ -85,5 +86,6 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
           command_timeout: 15m
           script: bash /root/docker/cashaba-backend/scripts/deploy.sh
