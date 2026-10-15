@@ -67,6 +67,13 @@ GitHub Secrets; it is not the GitHub account password or VPS login password.
 Keep the complete private key in `SSH_PRIVATE_KEY`, including its BEGIN/END
 lines. This does not require changes to `docker-compose.yaml` or the VPS setup.
 
+Before connecting, **Identify SSH deployment key** logs only the public SHA256
+fingerprint derived from this repository's `SSH_PRIVATE_KEY`. Encrypted OpenSSH
+keys can be fingerprinted without unlocking their private portion. Compare that
+fingerprint with an accepted key in the VPS SSH log or `authorized_keys`. This
+distinguishes the key actually configured in Actions from a similarly named
+file on the VPS. No private key, passphrase or key comment is logged.
+
 Push main or manually run the **Deploy** workflow on main. It validates the
 backend files without loading the VPS-only environment file, runs deployment
 regressions, and publishes the runtime image. It copies only
