@@ -71,7 +71,7 @@ const rules: Array<[Operation, RegExp]> = [
 export function planningQuestion(message: string) {
   message = normalizeChatQuestion(message);
   // Structured scenario inputs are values, not intent instructions.
-  return message.split(/\n(?:Explicit hypothetical scenario details[^\n]*:|(?:Scenario|Planning inputs|Details)\s*:)|\n```(?:json)?\s*\n/i)[0].trim();
+  return message.split(/(?:^|\s)(?:Explicit hypothetical scenario details[^\n:]*|Scenario|Planning inputs|Details)\s*:\s*(?=\{)|\n```(?:json)?\s*\n/i)[0].trim();
 }
 export function clearPlanningIntent(message: string): Operation | null {
   const question = planningQuestion(message).normalize('NFKC').toLowerCase();

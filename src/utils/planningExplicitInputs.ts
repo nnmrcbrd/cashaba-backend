@@ -2,7 +2,7 @@ import { planSchema, type FinancialPlan } from './financialPlanner';
 import { statedGoalInputs, statedFrequency } from './planningInputs';
 
 const inputSchema = planSchema.omit({ operation: true, language: true }).partial();
-const detailsLabel = (message: string) => message.match(/(?:^|\n)(?:Explicit hypothetical scenario details[^\n:]*|Scenario|Planning inputs|Details)\s*:\s*(\{[\s\S]*\})\s*$/i)
+const detailsLabel = (message: string) => message.match(/(?:^|\s)(?:Explicit hypothetical scenario details[^\n:]*|Scenario|Planning inputs|Details)\s*:\s*(\{[\s\S]*\})\s*$/i)
   ?? message.match(/```json\s*(\{[\s\S]*\})\s*```\s*$/i)
   ?? message.match(/^\s*(\{[\s\S]*\})\s*$/);
 

@@ -42,3 +42,12 @@ test('explicit savings entries still require the financial action confirmation p
     assert.equal(isExplicitFinancialAction(message), true, message);
   }
 });
+
+test('a number of recurring contributions is a count rather than a peso amount', () => {
+  for (const text of ['4 weekly contributions left', '12 monthly payments remaining', '6 daily deposits', '8 weekly periods']) {
+    assert.equal(statedGoalInputs(text).contribution, undefined, text);
+  }
+  assert.equal(statedGoalInputs('4 weekly contributions left; I save ₱500 weekly').contribution, 500);
+  assert.equal(statedGoalInputs('₱4 weekly contributions').contribution, 4);
+  assert.equal(statedGoalInputs('weekly contribution: 4').contribution, 4);
+});

@@ -25,7 +25,13 @@ export function statedRecurringAmount(message: string) {
     const amountEnd = amount.index + amount[0].length, periodEnd = period.index + period[0].length;
     const after = period.index >= amountEnd && /^[\s,:;=–—]*(?:pesos?\s*)?$/i.test(message.slice(amountEnd, period.index));
     const before = amount.index >= periodEnd && /^[\s,:;=–—]*(?:(?:(?:allocated|dedicated)\s+)?(?:savings|contribution|allocation)(?:\s+(?:is|of))?[\s,:;=–—]*)?$/i.test(message.slice(periodEnd, amount.index));
-    if (after || before) {
+    // "4 weekly contributions" counts occurrences. It does not state a PHP4
+    // saving rate. Explicit currency/pesos and "weekly contribution: 4" still
+    // identify money, including deliberately small contributions.
+    const contributionCount = after && !/^(?:₱|php|p)/i.test(amount[0])
+      && !/pesos?/i.test(message.slice(amountEnd, period.index))
+      && /^\s+(?:contributions?|payments?|deposits?|periods?|instalments?|installments?)\b/i.test(message.slice(periodEnd));
+    if ((after || before) && !contributionCount) {
       const value = Number(amount[1].replaceAll(',', ''));
       if (Number.isFinite(value) && value <= 999_999_999_999.99) candidates.push({ amount: value, frequency,
         start: Math.min(amount.index, period.index), end: Math.max(amountEnd, periodEnd) });
