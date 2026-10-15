@@ -63,7 +63,9 @@ export async function cancelCheckout(tx: FinancialTx, userId: string) {
   if (!current || ['CANCELLED', 'EXPIRED'].includes(current.status)) return current;
   if (current.providerSubscriptionId) {
     if (current.provider === 'PAYMONGO') await cancelPayMongoSubscription(current.providerSubscriptionId);
-    else if (current.provider === 'PAYMONGO_TEST') await expireTestCheckout(current.providerSubscriptionId);
+    // A fulfilled test checkout is a one-time payment, not recurring billing.
+    // PayMongo cannot expire a paid session; only unpaid checkouts need closing.
+    else if (current.provider === 'PAYMONGO_TEST' && !isPaidPlan(current.plan)) await expireTestCheckout(current.providerSubscriptionId);
   }
   await tx.subscription.update({ where: { userId }, data: { plan: 'FREE', status: 'CANCELLED', cancelAtPeriodEnd: false, cancelledAt: new Date() } });
   await closeCheckout(tx, userId);
