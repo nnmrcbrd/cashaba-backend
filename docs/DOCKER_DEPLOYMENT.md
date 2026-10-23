@@ -8,7 +8,7 @@ This repository deploys the Express API. The frontend is hosted separately.
 - `docker-compose.yaml`: the single `app` service using `mrnbnld/cashaba-backend:latest`.
 - `docker/docker-compose.build.yaml`: optional local build override for that same service.
 - `.env.example`: the application configuration template, retained for local and VPS setup.
-- `.github/workflows/deploy.yaml`: validates, builds, publishes and deploys main.
+- `.github/workflows/deploy.yaml`: deploys pushes to main and explicit manual runs on `panelist-improvements`.
 - `scripts/deploy.sh`: checks the VPS setup and image readiness before replacing the app.
 - `nginx.conf`: host Nginx HTTP proxy reference; use its location block in the existing HTTPS virtual host.
 
@@ -74,7 +74,13 @@ fingerprint with an accepted key in the VPS SSH log or `authorized_keys`. This
 distinguishes the key actually configured in Actions from a similarly named
 file on the VPS. No private key, passphrase or key comment is logged.
 
-Push main or manually run the **Deploy** workflow on main. It validates the
+Push main or manually run the **Deploy** workflow on main. To deploy the Android
+implementation before merging, manually select `panelist-improvements` in the
+workflow's branch selector. Pushing that branch alone does not deploy it.
+Deployment runs share one queue across both branches. Images are published with
+both `latest` and `sha-COMMIT` tags and a source revision label.
+
+The workflow validates Android authentication and TypeScript in addition to the
 backend files without loading the VPS-only environment file, runs deployment
 regressions, and publishes the runtime image. It copies only
 `docker-compose.yaml` and `scripts/deploy.sh` to `/root/docker/cashaba-backend`,

@@ -6,6 +6,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { withFinancialOperation, type FinancialTx } from './financialOperation';
 import { assertOtpMailConfigured } from './mail';
 import { requestEmailOtp, consumeEmailOtp, OTP_TTL_MS } from './emailOtp';
+import { isMobileCodeChallenge, mobileHandoffFingerprint, mobileProofChallenge } from '@/utils/mobileOAuth';
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -127,6 +128,44 @@ export async function refreshUserSession(refreshToken: string) {
     return { accessToken: result.accessToken, refreshToken: result.refreshToken,
       freshSignIn: decoded.authMethod === 'GOOGLE' && decoded.freshSignIn === true
         && signInAge >= 0 && signInAge < 15 * 60 * 1000 };
+  });
+}
+
+export async function createMobileGoogleHandoff(refreshToken: string, challenge: string) {
+  if (!isMobileCodeChallenge(challenge)) throw new Error('Invalid mobile sign-in challenge.');
+  const decoded = jwt.verify(refreshToken, requiredSecret('JWT_REFRESH_SECRET')) as jwt.JwtPayload;
+  if (typeof decoded.userId !== 'string' || decoded.authMethod !== 'GOOGLE' || decoded.freshSignIn !== true) {
+    throw new Error('A fresh Google sign-in is required.');
+  }
+  return withFinancialOperation(decoded.userId, async tx => {
+    const user = await tx.user.findUniqueOrThrow({ where: { id: decoded.userId as string } });
+    if (user.accountStatus === 'SUSPENDED' || user.sessionVersion !== decoded.sessionVersion) throw new Error('Please sign in again.');
+    const claimed = await tx.token.updateMany({
+      where: { token: tokenFingerprint(refreshToken), userId: user.id, type: 'REFRESH', consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
+      data: { consumedAt: new Date() },
+    });
+    if (!claimed.count) throw new Error('Google sign-in is no longer active.');
+    const code = randomBytes(32).toString('base64url');
+    await tx.token.create({ data: {
+      userId: user.id, type: 'REFRESH', token: mobileHandoffFingerprint(code, challenge),
+      expiresAt: new Date(Date.now() + 90_000),
+    } });
+    return code;
+  });
+}
+
+export async function exchangeMobileGoogleHandoff(code: unknown, verifier: unknown) {
+  if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(code)) throw new Error('Invalid mobile sign-in code.');
+  const fingerprint = mobileHandoffFingerprint(code, mobileProofChallenge(verifier));
+  const grant = await prisma.token.findUnique({ where: { token: fingerprint } });
+  if (!grant || grant.type !== 'REFRESH') throw new Error('Mobile sign-in expired. Please try again.');
+  return withFinancialOperation(grant.userId, async tx => {
+    const claimed = await tx.token.updateMany({
+      where: { id: grant.id, userId: grant.userId, type: 'REFRESH', consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
+      data: { consumedAt: new Date() },
+    });
+    if (!claimed.count) throw new Error('Mobile sign-in expired. Please try again.');
+    return session(tx, grant.userId, 'GOOGLE');
   });
 }
 export async function revokeUserSession(refreshToken?: string) {

@@ -13,7 +13,7 @@ const source = fileURLToPath(new URL('../scripts/ssh-key-fingerprint.sh', import
 
 function run(key) {
   const script = fs.readFileSync(source, 'utf8');
-  const result = spawnSync(bash, ['-c', script], { encoding: 'utf8', timeout: 10_000,
+  const result = spawnSync(bash, ['-c', script], { encoding: 'utf8', timeout: process.platform === 'win32' ? 30_000 : 10_000,
     windowsHide: true, env: { ...process.env, SSH_PRIVATE_KEY: key } });
   assert.equal(result.error, undefined);
   return { status: result.status, output: result.stdout + result.stderr };

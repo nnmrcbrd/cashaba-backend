@@ -18,11 +18,14 @@ import {
   verifyUserEmailCode,
   verifyPasswordResetCode,
   loginWithGoogle,
+  createMobileGoogleHandoff,
+  exchangeMobileGoogleHandoff,
 } from '../services/auth';
 import { randomBytes, timingSafeEqual } from 'crypto';
 import { EmailOtpRateLimitError, requestEmailOtp } from '../services/emailOtp';
 import { FinancialError } from '../services/financialOperation';
 import { clearRefreshCookie, setRefreshCookie } from '../utils/authCookies';
+import { createMobileOAuthState, isMobileCodeChallenge, mobileGoogleResultUrl, readMobileOAuthChallenge } from '@/utils/mobileOAuth';
 
 function sendOtpRateLimit(res: Response, error: unknown) {
   if (!(error instanceof EmailOtpRateLimitError)) return false;
@@ -56,14 +59,21 @@ function safeStateMatch(received: unknown, stored: unknown) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-export const startGoogleOAuth = async (_req: Request, res: Response): Promise<void> => {
+export const startGoogleOAuth = async (req: Request, res: Response): Promise<void> => {
+  const mobile = req.query.client === 'android';
+  const challenge = req.query.code_challenge;
+  if (mobile && (!isMobileCodeChallenge(challenge) || req.query.code_challenge_method !== 'S256')) {
+    res.status(400).json({ message: 'A valid S256 mobile sign-in challenge is required.' });
+    return;
+  }
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId || !process.env.GOOGLE_CLIENT_SECRET) {
-    res.redirect(oauthResultUrl('Google sign-in is not configured yet.'));
+    const error = 'Google sign-in is not configured yet.';
+    res.redirect(mobile ? mobileGoogleResultUrl({ error }) : oauthResultUrl(error));
     return;
   }
 
-  const state = randomBytes(32).toString('base64url');
+  const state = mobile ? createMobileOAuthState(challenge as string) : randomBytes(32).toString('base64url');
   res.cookie('googleOAuthState', state, oauthStateCookieOptions);
   const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authorizationUrl.search = new URLSearchParams({
@@ -78,11 +88,13 @@ export const startGoogleOAuth = async (_req: Request, res: Response): Promise<vo
 };
 
 export const finishGoogleOAuth = async (req: Request, res: Response): Promise<void> => {
+  let mobileChallenge: string | null = null;
   try {
-    if (typeof req.query.error === 'string') throw new Error('Google sign-in was cancelled.');
     if (!safeStateMatch(req.query.state, req.cookies?.googleOAuthState)) {
       throw new Error('Google sign-in verification expired. Please try again.');
     }
+    mobileChallenge = readMobileOAuthChallenge(req.query.state);
+    if (typeof req.query.error === 'string') throw new Error('Google sign-in was cancelled.');
     if (typeof req.query.code !== 'string') throw new Error('Google did not return an authorization code.');
 
     const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -128,12 +140,29 @@ export const finishGoogleOAuth = async (req: Request, res: Response): Promise<vo
     });
 
     res.clearCookie('googleOAuthState', oauthStateCookieOptions);
+    res.setHeader('Cache-Control', 'no-store');
+    if (mobileChallenge) {
+      const code = await createMobileGoogleHandoff(result.refreshToken, mobileChallenge);
+      res.redirect(mobileGoogleResultUrl({ code }));
+      return;
+    }
     setRefreshCookie(res, result.refreshToken);
     res.redirect(oauthResultUrl());
   } catch (error) {
     res.clearCookie('googleOAuthState', oauthStateCookieOptions);
     const message = error instanceof Error ? error.message : 'Unable to sign in with Google.';
-    res.redirect(oauthResultUrl(message));
+    res.redirect(mobileChallenge ? mobileGoogleResultUrl({ error: message }) : oauthResultUrl(message));
+  }
+};
+
+export const exchangeMobileGoogle = async (req: Request, res: Response): Promise<void> => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const result = await exchangeMobileGoogleHandoff(req.body?.code, req.body?.verifier);
+    setRefreshCookie(res, result.refreshToken);
+    res.json({ user: result.user, accessToken: result.accessToken });
+  } catch {
+    res.status(401).json({ message: 'Mobile Google sign-in could not be completed. Please sign in again.' });
   }
 };
 

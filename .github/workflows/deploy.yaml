@@ -12,12 +12,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: cashaba-backend-deploy-${{ github.ref }}
+  group: cashaba-backend-deploy
   cancel-in-progress: false
 
 jobs:
   build-and-push:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/panelist-improvements')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -39,6 +41,13 @@ jobs:
           docker compose -f docker-compose.yaml config --no-interpolate --no-env-resolution --no-path-resolution --format json | node docker/validate-runtime-compose.mjs
           node --test docker/deploy.test.mjs docker/ssh-key-fingerprint.test.mjs
 
+      - name: Validate Android authentication before publishing
+        run: |
+          npm ci
+          npm run db:generate
+          npx tsc --noEmit
+          npx tsx --test --test-concurrency=2 src/config/origins.test.ts src/controllers/mobileOAuth.test.ts src/utils/mobileOAuth.test.ts
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -55,13 +64,18 @@ jobs:
           target: runtime
           platforms: linux/amd64
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/cashaba-backend
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/cashaba-backend:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/cashaba-backend:sha-${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=backend-runtime
           cache-to: type=gha,mode=max,scope=backend-runtime
 
   deploy:
     needs: [build-and-push]
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/panelist-improvements')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
