@@ -13,6 +13,7 @@ import {
   resetPassword,
   startGoogleOAuth,
   finishGoogleOAuth,
+  exchangeMobileGoogle,
 } from '../controllers/auth.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { rateLimit } from '../middlewares/rateLimit.middleware';
@@ -39,6 +40,7 @@ router.post('/verify-reset-code', credentialLimiter, verifyResetCode);
 router.post('/login', credentialLimiter, login);
 router.get('/google', credentialLimiter, startGoogleOAuth);
 router.get('/google/callback', credentialLimiter, finishGoogleOAuth);
+router.post('/google/mobile-exchange', protectCookieMutation, credentialLimiter, exchangeMobileGoogle);
 router.post('/refresh', protectCookieMutation, rateLimit({ windowMs: 60_000, max: 60 }), refresh);
 router.post('/logout', protectCookieMutation, rateLimit({ windowMs: 60_000, max: 30 }), logout);
 router.post('/forgot-password', requireEmailDelivery, recoveryLimiter, forgotPassword);

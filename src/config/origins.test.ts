@@ -19,7 +19,7 @@ function call(port: number, method: string, path: string, headers: Record<string
   });
 }
 
-test('actual API CORS and session-origin protection accept the three Casha-Ba HTTPS origins', async t => {
+test('actual API CORS and session-origin protection accept web and packaged Android origins', async t => {
   const names = ['NODE_ENV', 'FRONTEND_URL', 'CORS_ALLOWED_ORIGINS'] as const;
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
   const previousQuery = prisma.$queryRawUnsafe;
@@ -47,7 +47,7 @@ test('actual API CORS and session-origin protection accept the three Casha-Ba HT
     const address = server.address();
     assert.ok(address && typeof address !== 'string');
     const port = address.port;
-    const allowed = ['https://www.casha-ba.online', 'https://casha-ba.online', 'https://api.casha-ba.online'];
+    const allowed = ['https://www.casha-ba.online', 'https://casha-ba.online', 'https://api.casha-ba.online', 'https://localhost'];
 
     await t.test('GET and OPTIONS responses allow credentials and echo each exact trusted origin', async () => {
       for (const origin of allowed) {
@@ -73,7 +73,7 @@ test('actual API CORS and session-origin protection accept the three Casha-Ba HT
       assert.equal(rateChecks, 0, 'Preflight must complete before protected auth handlers');
     });
 
-    await t.test('all three origins reach refresh authentication instead of failing the origin guard', async () => {
+    await t.test('all trusted origins reach refresh authentication instead of failing the origin guard', async () => {
       for (const origin of allowed) {
         const result = await call(port, 'POST', '/api/auth/refresh', { Origin: origin });
         assert.equal(result.status, 401, 'A missing token must reach auth, not receive an origin rejection');

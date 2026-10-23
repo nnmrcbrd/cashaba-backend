@@ -2,6 +2,8 @@ const cashaBaOrigins = [
   'https://www.casha-ba.online',
   'https://casha-ba.online',
   'https://api.casha-ba.online',
+  // Capacitor's bundled Android WebView origin; credentials remain app-scoped.
+  'https://localhost',
 ];
 
 function configuredOrigin(value: string, name: string): string {

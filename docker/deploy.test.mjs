@@ -39,7 +39,9 @@ fi
     const script = process.platform === 'win32'
       ? 'CASHABA_TEST_ROOT="$(cygpath -u "$CASHABA_TEST_ROOT")"; export CASHABA_TEST_ROOT; export PATH="$CASHABA_TEST_ROOT/bin:$PATH"; exec bash "$CASHABA_TEST_ROOT/scripts/deploy.sh"'
       : 'export PATH="$CASHABA_TEST_ROOT/bin:$PATH"; exec bash "$CASHABA_TEST_ROOT/scripts/deploy.sh"';
-    const result = spawnSync(bash, ['-c', script], { encoding: 'utf8', env: environment, timeout: 10_000, windowsHide: true });
+    // Leave room for Git Bash startup on Windows while other builds are running.
+    const result = spawnSync(bash, ['-c', script], { encoding: 'utf8', env: environment,
+      timeout: process.platform === 'win32' ? 30_000 : 10_000, windowsHide: true });
     assert.equal(result.error, undefined);
     const log = path.join(temporaryRoot, 'calls.txt');
     return { status: result.status, output: result.stdout + result.stderr,
